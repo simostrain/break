@@ -10,8 +10,6 @@ BINANCE_API = "https://api.binance.com"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 RSI_PERIOD = 14
-BREAKOUT_MIN = 0.0  # Min distance for alert
-BREAKOUT_MAX = 2.0  # Max distance for alert
 reported = set()  # avoid duplicate (symbol, hour)
 
 CUSTOM_TICKERS = [
@@ -209,23 +207,25 @@ def fetch_breakout_candles(symbol):
         all_closes = [float(candles[j][4]) for j in range(0, current_index + 1)]
         rsi = calculate_rsi_with_full_history(all_closes, RSI_PERIOD)
 
-        # Calculate Supertrend
+        # Calculate Supertrend for CURRENT candle
         supertrend_value, direction, upper_band, lower_band = calculate_supertrend(candles, current_index)
         
         if direction is None or upper_band is None or lower_band is None:
             return None
 
-        # Calculate breakout distance
-        if direction == 1:  # Downtrend
-            # Distance to lower band (breakout to uptrend)
-            breakout_distance = ((close - lower_band) / lower_band) * 100
-        else:  # Uptrend - we're not interested in these for breakout alerts
-            return None
-
-        # Only return if within breakout range
-        if BREAKOUT_MIN <= breakout_distance <= BREAKOUT_MAX:
-            hour = candle_time.strftime("%Y-%m-%d %H:00")
-            return (symbol, pct, close, vol_usdt, vm, rsi, direction, breakout_distance, hour)
+        # Calculate Supertrend for PREVIOUS candle
+        if current_index > 0:
+            prev_supertrend_value, prev_direction, prev_upper_band, prev_lower_band = calculate_supertrend(candles, current_index - 1)
+            
+            if prev_direction is None:
+                return None
+            
+            # Check if trend JUST CHANGED from downtrend to uptrend
+            if prev_direction == 1 and direction == -1:  # Was downtrend, now uptrend!
+                hour = candle_time.strftime("%Y-%m-%d %H:00")
+                # Calculate how far it broke past the line
+                breakout_distance = ((close - lower_band) / lower_band) * 100
+                return (symbol, pct, close, vol_usdt, vm, rsi, direction, breakout_distance, hour, "BREAKOUT")
         
         return None
     except Exception as e:
@@ -252,26 +252,26 @@ def format_breakout_report(fresh, duration):
     for p in fresh:
         grouped[p[8]].append(p)
 
-    report = f"🚀 <b>BREAKOUT ALERTS</b> 🚀\n"
+    report = f"🚀 <b>TREND BREAKOUT ALERTS</b> 🚀\n"
     report += f"⏱ Scan: {duration:.2f}s\n\n"
     
     for h in sorted(grouped):
-        items = sorted(grouped[h], key=lambda x: x[7])  # Sort by breakout distance (closest first)
+        items = sorted(grouped[h], key=lambda x: x[4], reverse=True)  # Sort by VM (volume multiplier)
         
         report += f"  ⏰ {h} UTC\n"
         
-        for symbol, pct, close, vol_usdt, vm, rsi, direction, breakout_distance, hour in items:
+        for symbol, pct, close, vol_usdt, vm, rsi, direction, breakout_distance, hour, signal in items:
             sym = symbol.replace("USDT","")
             rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
             
             # Format line exactly like pump scanner
-            line = f"{sym:6s} {pct:5.2f} {rsi_str:>4s} {vm:4.1f} {format_volume(vol_usdt):4s} 🔴-{breakout_distance:.1f}%"
+            line = f"{sym:6s} {pct:5.2f} {rsi_str:>4s} {vm:4.1f} {format_volume(vol_usdt):4s} 🟢+{breakout_distance:.1f}%"
             
-            report += f"🚀 <code>{line}</code>\n"
+            report += f"✅ <code>{line}</code>\n"
         
         report += "\n"
     
-    report += "💡 These coins are in DOWNTREND but close to breaking into UPTREND!\n"
+    report += "💡 These coins JUST BROKE from DOWNTREND → UPTREND!\n"
     
     return report
 
