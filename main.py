@@ -168,82 +168,91 @@ def get_usdt_pairs():
         print("Exchange info error:", e)
         return []
 
-def fetch_support_touch(symbol):
+def fetch_support_touch(symbol, now_utc, start_time):
     try:
-        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=50"
+        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=100"
         candles = session.get(url, timeout=60).json()
         if not candles or isinstance(candles, dict):
-            return None
+            return []
 
-        # Get the latest completed candle (second to last)
-        current_index = len(candles) - 2
-        if current_index < 14:
-            return None
-
-        c = candles[current_index]
-        candle_time = datetime.fromtimestamp(c[0]/1000, tz=timezone.utc)
+        results = []
         
-        # Get previous candle for pump percentage calculation
-        prev_close = float(candles[current_index - 1][4])
-        
-        open_p = float(c[1])
-        high = float(c[2])
-        low = float(c[3])
-        close = float(c[4])
-        volume = float(c[5])
-        vol_usdt = open_p * volume
-
-        # Calculate pump percentage (current close vs previous close)
-        pct = ((close - prev_close) / prev_close) * 100
-
-        # Calculate volume multiplier (20-period MA)
-        ma_start = max(0, current_index - 19)
-        ma_vol = [
-            float(candles[j][1]) * float(candles[j][5])
-            for j in range(ma_start, current_index + 1)
-        ]
-        ma = sum(ma_vol) / len(ma_vol)
-        vm = vol_usdt / ma if ma > 0 else 1.0
-
-        # Calculate RSI
-        all_closes = [float(candles[j][4]) for j in range(0, current_index + 1)]
-        rsi = calculate_rsi_with_full_history(all_closes, RSI_PERIOD)
-
-        # Calculate Supertrend for CURRENT candle
-        supertrend_value, direction, upper_band, lower_band = calculate_supertrend(candles, current_index)
-        
-        if direction is None or upper_band is None or lower_band is None:
-            return None
-
-        # Only interested in UPTREND coins
-        if direction == -1:  # Uptrend
-            # Calculate distance from close to support line (green line / lower_band)
-            support_line = supertrend_value  # This is the lower_band when in uptrend
-            distance_from_support = ((close - support_line) / support_line) * 100
+        # Scan through all candles from start_time to now
+        for i in range(len(candles) - 1):  # -1 because we don't want the incomplete current candle
+            c = candles[i]
+            candle_time = datetime.fromtimestamp(c[0]/1000, tz=timezone.utc)
             
-            # Check if within range (close to support)
-            if SUPPORT_MIN <= distance_from_support <= SUPPORT_MAX:
-                hour = candle_time.strftime("%Y-%m-%d %H:00")
+            # Only process candles from start_time onwards
+            if candle_time < start_time or candle_time >= now_utc - timedelta(hours=1):
+                continue
+            
+            if i < 14:  # Need enough history for RSI
+                continue
+            
+            # Get previous candle for pump percentage calculation
+            prev_close = float(candles[i - 1][4])
+            
+            open_p = float(c[1])
+            high = float(c[2])
+            low = float(c[3])
+            close = float(c[4])
+            volume = float(c[5])
+            vol_usdt = open_p * volume
+
+            # Calculate pump percentage (current close vs previous close)
+            pct = ((close - prev_close) / prev_close) * 100
+
+            # Calculate volume multiplier (20-period MA)
+            ma_start = max(0, i - 19)
+            ma_vol = [
+                float(candles[j][1]) * float(candles[j][5])
+                for j in range(ma_start, i + 1)
+            ]
+            ma = sum(ma_vol) / len(ma_vol)
+            vm = vol_usdt / ma if ma > 0 else 1.0
+
+            # Calculate RSI
+            all_closes = [float(candles[j][4]) for j in range(0, i + 1)]
+            rsi = calculate_rsi_with_full_history(all_closes, RSI_PERIOD)
+
+            # Calculate Supertrend for CURRENT candle
+            supertrend_value, direction, upper_band, lower_band = calculate_supertrend(candles, i)
+            
+            if direction is None or upper_band is None or lower_band is None:
+                continue
+
+            # Only interested in UPTREND coins
+            if direction == -1:  # Uptrend
+                # Calculate distance from close to support line (green line / lower_band)
+                support_line = supertrend_value  # This is the lower_band when in uptrend
+                distance_from_support = ((close - support_line) / support_line) * 100
                 
-                # Calculate distance to resistance (upper band - where downtrend would start)
-                distance_to_resistance = ((upper_band - close) / close) * 100
-                
-                return (symbol, pct, close, vol_usdt, vm, rsi, direction, 
-                       support_line, distance_from_support, upper_band, distance_to_resistance, hour)
+                # Check if within range (close to support)
+                if SUPPORT_MIN <= distance_from_support <= SUPPORT_MAX:
+                    hour = candle_time.strftime("%Y-%m-%d %H:00")
+                    
+                    # Calculate distance to resistance (upper band - where downtrend would start)
+                    distance_to_resistance = ((upper_band - close) / close) * 100
+                    
+                    results.append((symbol, pct, close, vol_usdt, vm, rsi, direction, 
+                           support_line, distance_from_support, upper_band, distance_to_resistance, hour))
         
-        return None
+        return results
     except Exception as e:
         print(f"{symbol} error:", e)
-        return None
+        return []
 
 def check_support_touches(symbols):
+    now_utc = datetime.now(timezone.utc)
+    start_time = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)  # Start from 00:00 UTC today
     touches = []
 
     with ThreadPoolExecutor(max_workers=60) as ex:
-        for f in as_completed([ex.submit(fetch_support_touch, s) for s in symbols]):
-            result = f.result()
-            if result:
-                touches.append(result)
+        futures = [ex.submit(fetch_support_touch, s, now_utc, start_time) for s in symbols]
+        for f in as_completed(futures):
+            results = f.result()
+            if results:
+                touches.extend(results)  # extend instead of append since we get multiple results
 
     return touches
 
