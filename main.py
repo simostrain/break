@@ -91,68 +91,106 @@ def calculate_rsi_with_full_history(closes, period=14):
 
 # ==== Supertrend Calculation ====
 def calculate_supertrend(candles, current_index, atr_period=10, factor=3.0):
+    """
+    Calculate Supertrend indicator - Binance method.
+    Must calculate sequentially from start to properly track trend changes.
+    Returns: (supertrend_value, direction, upper_band, lower_band)
+    direction = -1 for uptrend, 1 for downtrend
+    """
     if current_index < atr_period:
         return None, None, None, None
     
-    # Calculate ATR
-    atr_values = []
-    for i in range(current_index - atr_period + 1, current_index + 1):
-        high = float(candles[i][2])
-        low = float(candles[i][3])
-        prev_close = float(candles[i-1][4]) if i > 0 else float(candles[i][1])
+    # Arrays to store values as we calculate sequentially
+    final_upper_band = []
+    final_lower_band = []
+    supertrend = []
+    trend = []
+    
+    # Calculate from atr_period to current_index
+    for idx in range(atr_period, current_index + 1):
+        # Calculate ATR for this candle
+        atr_values = []
+        for i in range(idx - atr_period + 1, idx + 1):
+            high = float(candles[i][2])
+            low = float(candles[i][3])
+            prev_close = float(candles[i-1][4]) if i > 0 else float(candles[i][1])
+            
+            tr = max(
+                high - low,
+                abs(high - prev_close),
+                abs(low - prev_close)
+            )
+            atr_values.append(tr)
         
-        tr = max(
-            high - low,
-            abs(high - prev_close),
-            abs(low - prev_close)
-        )
-        atr_values.append(tr)
-    
-    atr = sum(atr_values) / len(atr_values)
-    
-    # Calculate basic bands
-    high = float(candles[current_index][2])
-    low = float(candles[current_index][3])
-    close = float(candles[current_index][4])
-    hl2 = (high + low) / 2
-    
-    basic_upper = hl2 + (factor * atr)
-    basic_lower = hl2 - (factor * atr)
-    
-    # Initialize or get previous supertrend
-    if current_index == atr_period:
-        final_upper = basic_upper
-        final_lower = basic_lower
-    else:
-        prev_high = float(candles[current_index-1][2])
-        prev_low = float(candles[current_index-1][3])
-        prev_close = float(candles[current_index-1][4])
-        prev_hl2 = (prev_high + prev_low) / 2
+        atr = sum(atr_values) / len(atr_values)
         
-        prev_atr_values = []
-        for i in range(current_index - atr_period, current_index):
-            h = float(candles[i][2])
-            l = float(candles[i][3])
-            pc = float(candles[i-1][4]) if i > 0 else float(candles[i][1])
-            tr = max(h - l, abs(h - pc), abs(l - pc))
-            prev_atr_values.append(tr)
-        prev_atr = sum(prev_atr_values) / len(prev_atr_values)
+        # Get current candle data
+        high = float(candles[idx][2])
+        low = float(candles[idx][3])
+        close = float(candles[idx][4])
+        hl2 = (high + low) / 2
         
-        prev_basic_upper = prev_hl2 + (factor * prev_atr)
-        prev_basic_lower = prev_hl2 - (factor * prev_atr)
+        # Calculate basic bands
+        basic_upper_band = hl2 + (factor * atr)
+        basic_lower_band = hl2 - (factor * atr)
         
-        final_upper = basic_upper if basic_upper < prev_basic_upper or prev_close > prev_basic_upper else prev_basic_upper
-        final_lower = basic_lower if basic_lower > prev_basic_lower or prev_close < prev_basic_lower else prev_basic_lower
+        # Calculate final bands with trailing
+        if idx == atr_period:
+            # First calculation
+            final_ub = basic_upper_band
+            final_lb = basic_lower_band
+        else:
+            # Get previous close
+            prev_close = float(candles[idx-1][4])
+            
+            # Trailing upper band
+            if basic_upper_band < final_upper_band[-1] or prev_close > final_upper_band[-1]:
+                final_ub = basic_upper_band
+            else:
+                final_ub = final_upper_band[-1]
+            
+            # Trailing lower band
+            if basic_lower_band > final_lower_band[-1] or prev_close < final_lower_band[-1]:
+                final_lb = basic_lower_band
+            else:
+                final_lb = final_lower_band[-1]
+        
+        final_upper_band.append(final_ub)
+        final_lower_band.append(final_lb)
+        
+        # Determine trend direction (Binance method)
+        if idx == atr_period:
+            # First trend determination
+            if close <= final_ub:
+                current_trend = 1  # Downtrend
+                st = final_ub
+            else:
+                current_trend = -1  # Uptrend
+                st = final_lb
+        else:
+            # Check previous trend
+            prev_trend = trend[-1]
+            
+            if prev_trend == -1:  # Was uptrend
+                if close <= final_lb:
+                    current_trend = 1  # Switch to downtrend
+                    st = final_ub
+                else:
+                    current_trend = -1  # Stay in uptrend
+                    st = final_lb
+            else:  # Was downtrend (prev_trend == 1)
+                if close > final_ub:
+                    current_trend = -1  # Switch to uptrend
+                    st = final_lb
+                else:
+                    current_trend = 1  # Stay in downtrend
+                    st = final_ub
+        
+        trend.append(current_trend)
+        supertrend.append(st)
     
-    # Current direction
-    if close <= final_upper:
-        direction = 1  # Downtrend
-        supertrend = final_upper
-    else:
-        direction = -1  # Uptrend
-        supertrend = final_lower
-    
-    return supertrend, direction, final_upper, final_lower
+    # Return the last calculated values
+    return supertrend[-1], trend[-1], final_upper_band[-1], final_lower_band[-1]
 
 # ==== Binance ====
 def get_usdt_pairs():
