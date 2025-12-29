@@ -223,9 +223,19 @@ def fetch_breakout_candles(symbol):
             # Check if trend JUST CHANGED from downtrend to uptrend
             if prev_direction == 1 and direction == -1:  # Was downtrend, now uptrend!
                 hour = candle_time.strftime("%Y-%m-%d %H:00")
-                # Calculate how far it broke past the line
-                breakout_distance = ((close - lower_band) / lower_band) * 100
-                return (symbol, pct, close, vol_usdt, vm, rsi, direction, breakout_distance, hour, "BREAKOUT")
+                
+                # OLD RED LINE (last downtrend line) = prev_supertrend_value (which is prev_upper_band)
+                old_red_line = prev_supertrend_value
+                # Distance from close to old red line (how much we broke above it)
+                red_distance = ((close - old_red_line) / old_red_line) * 100
+                
+                # NEW GREEN LINE (first uptrend line) = supertrend_value (which is lower_band)
+                new_green_line = supertrend_value
+                # Distance from close to new green line (how far above we are now)
+                green_distance = ((close - new_green_line) / new_green_line) * 100
+                
+                return (symbol, pct, close, vol_usdt, vm, rsi, direction, 
+                       old_red_line, red_distance, new_green_line, green_distance, hour)
         
         return None
     except Exception as e:
@@ -250,28 +260,35 @@ def format_breakout_report(fresh, duration):
     # Group by hour
     grouped = defaultdict(list)
     for p in fresh:
-        grouped[p[8]].append(p)
+        grouped[p[11]].append(p)
 
     report = f"🚀 <b>TREND BREAKOUT ALERTS</b> 🚀\n"
     report += f"⏱ Scan: {duration:.2f}s\n\n"
     
     for h in sorted(grouped):
-        items = sorted(grouped[h], key=lambda x: x[4], reverse=True)  # Sort by VM (volume multiplier)
+        items = sorted(grouped[h], key=lambda x: x[8], reverse=True)  # Sort by red_distance (biggest break first)
         
         report += f"  ⏰ {h} UTC\n"
         
-        for symbol, pct, close, vol_usdt, vm, rsi, direction, breakout_distance, hour, signal in items:
+        for symbol, pct, close, vol_usdt, vm, rsi, direction, old_red_line, red_distance, new_green_line, green_distance, hour in items:
             sym = symbol.replace("USDT","")
             rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
             
-            # Format line exactly like pump scanner
-            line = f"{sym:6s} {pct:5.2f} {rsi_str:>4s} {vm:4.1f} {format_volume(vol_usdt):4s} 🟢+{breakout_distance:.1f}%"
+            # Line 1: Basic info like pump scanner
+            line1 = f"{sym:6s} {pct:5.2f} {rsi_str:>4s} {vm:4.1f} {format_volume(vol_usdt):4s}"
             
-            report += f"✅ <code>{line}</code>\n"
+            # Line 2: Old red line and distance
+            line2 = f"       🔴Old: ${old_red_line:.5f} (+{red_distance:.2f}%)"
+            
+            # Line 3: New green line and distance  
+            line3 = f"       🟢New: ${new_green_line:.5f} (+{green_distance:.2f}%)"
+            
+            report += f"✅ <code>{line1}</code>\n"
+            report += f"   <code>{line2}</code>\n"
+            report += f"   <code>{line3}</code>\n\n"
         
-        report += "\n"
-    
-    report += "💡 These coins JUST BROKE from DOWNTREND → UPTREND!\n"
+    report += "💡 🔴Old = Last downtrend line (broke above it!)\n"
+    report += "💡 🟢New = New uptrend line (support now)\n"
     
     return report
 
