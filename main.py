@@ -3,7 +3,7 @@ import time
 from datetime import datetime, timezone
 
 # Test with these 4 coins
-TEST_SYMBOLS = ["MantaUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT"]
+TEST_SYMBOLS = ["MANTAUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT"]
 BINANCE_API = "https://api.binance.com"
 
 session = requests.Session()
