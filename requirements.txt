@@ -1,1 +1,3 @@
-requests
+pandas==2.1.1
+pandas_ta==0.4.42b0
+requests==2.31.0
