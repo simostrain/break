@@ -10,8 +10,6 @@ BINANCE_API = "https://api.binance.com"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 RSI_PERIOD = 14
-BREAKOUT_MIN = 0.0  # Min distance for alert
-BREAKOUT_MAX = 2.0  # Max distance for alert
 reported = set()  # avoid duplicate (symbol, hour)
 
 CUSTOM_TICKERS = [
@@ -90,69 +88,87 @@ def calculate_rsi_with_full_history(closes, period=14):
     return round(rsi, 2)
 
 # ==== Supertrend Calculation ====
-def calculate_supertrend(candles, current_index, atr_period=10, factor=3.0):
+# Source - https://stackoverflow.com/a/78996666
+# Posted by Muhammad Saqib Scientist
+# Retrieved 2025-12-30, License - CC BY-SA 4.0
+def calculate_atr_rma(candles, current_index, period=10):
+    """Calculate ATR using RMA (same as Pine Script atr() function)"""
+    if current_index < period:
+        return None
+    
+    trs = []
+    for i in range(1, current_index + 1):
+        high = float(candles[i][2])
+        low = float(candles[i][3])
+        prev_close = float(candles[i-1][4])
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        trs.append(tr)
+    
+    atr = sum(trs[:period]) / period
+    for i in range(period, len(trs)):
+        atr = (atr * (period - 1) + trs[i]) / period
+    
+    return atr
+
+def calculate_supertrend(candles, current_index, atr_period=10, multiplier=3.0):
+    """
+    Calculate Supertrend - Direct translation from Pine Script by kivancOzbilgic
+    Returns: (supertrend_value, direction, upper_band, lower_band)
+    direction = 1 for uptrend, -1 for downtrend
+    """
     if current_index < atr_period:
         return None, None, None, None
     
-    # Calculate ATR
-    atr_values = []
-    for i in range(current_index - atr_period + 1, current_index + 1):
-        high = float(candles[i][2])
-        low = float(candles[i][3])
-        prev_close = float(candles[i-1][4]) if i > 0 else float(candles[i][1])
+    up_list = []
+    dn_list = []
+    trend_list = []
+    
+    for idx in range(atr_period, current_index + 1):
+        high = float(candles[idx][2])
+        low = float(candles[idx][3])
+        close = float(candles[idx][4])
+        src = (high + low) / 2
         
-        tr = max(
-            high - low,
-            abs(high - prev_close),
-            abs(low - prev_close)
-        )
-        atr_values.append(tr)
+        atr = calculate_atr_rma(candles, idx, atr_period)
+        up = src - (multiplier * atr)
+        up1 = up_list[-1] if len(up_list) > 0 else up
+        prev_close = float(candles[idx-1][4]) if idx > 0 else close
+        
+        if prev_close > up1:
+            up = max(up, up1)
+        up_list.append(up)
+        
+        dn = src + (multiplier * atr)
+        dn1 = dn_list[-1] if len(dn_list) > 0 else dn
+        
+        if prev_close < dn1:
+            dn = min(dn, dn1)
+        dn_list.append(dn)
+        
+        if idx == atr_period:
+            trend = 1
+        else:
+            prev_trend = trend_list[-1]
+            prev_up = up_list[-2]
+            prev_dn = dn_list[-2]
+            
+            if prev_trend == -1 and close > prev_dn:
+                trend = 1
+            elif prev_trend == 1 and close < prev_up:
+                trend = -1
+            else:
+                trend = prev_trend
+        
+        trend_list.append(trend)
     
-    atr = sum(atr_values) / len(atr_values)
+    last_trend = trend_list[-1]
+    last_up = up_list[-1]
+    last_dn = dn_list[-1]
     
-    # Calculate basic bands
-    high = float(candles[current_index][2])
-    low = float(candles[current_index][3])
-    close = float(candles[current_index][4])
-    hl2 = (high + low) / 2
-    
-    basic_upper = hl2 + (factor * atr)
-    basic_lower = hl2 - (factor * atr)
-    
-    # Initialize or get previous supertrend
-    if current_index == atr_period:
-        final_upper = basic_upper
-        final_lower = basic_lower
+    if last_trend == 1:
+        return last_up, last_trend, last_dn, last_up
     else:
-        prev_high = float(candles[current_index-1][2])
-        prev_low = float(candles[current_index-1][3])
-        prev_close = float(candles[current_index-1][4])
-        prev_hl2 = (prev_high + prev_low) / 2
-        
-        prev_atr_values = []
-        for i in range(current_index - atr_period, current_index):
-            h = float(candles[i][2])
-            l = float(candles[i][3])
-            pc = float(candles[i-1][4]) if i > 0 else float(candles[i][1])
-            tr = max(h - l, abs(h - pc), abs(l - pc))
-            prev_atr_values.append(tr)
-        prev_atr = sum(prev_atr_values) / len(prev_atr_values)
-        
-        prev_basic_upper = prev_hl2 + (factor * prev_atr)
-        prev_basic_lower = prev_hl2 - (factor * prev_atr)
-        
-        final_upper = basic_upper if basic_upper < prev_basic_upper or prev_close > prev_basic_upper else prev_basic_upper
-        final_lower = basic_lower if basic_lower > prev_basic_lower or prev_close < prev_basic_lower else prev_basic_lower
-    
-    # Current direction
-    if close <= final_upper:
-        direction = 1  # Downtrend
-        supertrend = final_upper
-    else:
-        direction = -1  # Uptrend
-        supertrend = final_lower
-    
-    return supertrend, direction, final_upper, final_lower
+        return last_dn, last_trend, last_dn, last_up
 
 # ==== Binance ====
 def get_usdt_pairs():
@@ -168,63 +184,89 @@ def get_usdt_pairs():
         print("Exchange info error:", e)
         return []
 
-def fetch_breakout_candles(symbol):
+def fetch_breakout_candles(symbol, now_utc, start_time):
     try:
-        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=50"
+        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=100"
         candles = session.get(url, timeout=60).json()
         if not candles or isinstance(candles, dict):
-            return None
+            return []
 
-        # Get the latest completed candle (second to last)
-        current_index = len(candles) - 2
-        if current_index < 14:
-            return None
-
-        c = candles[current_index]
-        candle_time = datetime.fromtimestamp(c[0]/1000, tz=timezone.utc)
+        results = []
         
-        open_p = float(c[1])
-        high = float(c[2])
-        low = float(c[3])
-        close = float(c[4])
-        volume = float(c[5])
-        vol_usdt = open_p * volume
+        for i in range(len(candles) - 1):
+            c = candles[i]
+            candle_time = datetime.fromtimestamp(c[0]/1000, tz=timezone.utc)
+            
+            if candle_time < start_time or candle_time >= now_utc - timedelta(hours=1):
+                continue
+            
+            if i < 14:
+                continue
+            
+            prev_close = float(candles[i - 1][4])
+            open_p = float(c[1])
+            high = float(c[2])
+            low = float(c[3])
+            close = float(c[4])
+            volume = float(c[5])
+            vol_usdt = open_p * volume
 
-        # Calculate RSI
-        all_closes = [float(candles[j][4]) for j in range(0, current_index + 1)]
-        rsi = calculate_rsi_with_full_history(all_closes, RSI_PERIOD)
+            pct = ((close - prev_close) / prev_close) * 100
 
-        # Calculate Supertrend
-        supertrend_value, direction, upper_band, lower_band = calculate_supertrend(candles, current_index)
+            ma_start = max(0, i - 19)
+            ma_vol = [
+                float(candles[j][1]) * float(candles[j][5])
+                for j in range(ma_start, i + 1)
+            ]
+            ma = sum(ma_vol) / len(ma_vol)
+            vm = vol_usdt / ma if ma > 0 else 1.0
+
+            all_closes = [float(candles[j][4]) for j in range(0, i + 1)]
+            rsi = calculate_rsi_with_full_history(all_closes, RSI_PERIOD)
+
+            # Current Supertrend
+            st_value, direction, upper_band, lower_band = calculate_supertrend(candles, i)
+            
+            if direction is None or i == 0:
+                continue
+            
+            # Previous Supertrend
+            prev_st_value, prev_direction, prev_upper_band, prev_lower_band = calculate_supertrend(candles, i-1)
+            
+            if prev_direction is None:
+                continue
+            
+            # Check if trend JUST CHANGED from downtrend to uptrend
+            if prev_direction == -1 and direction == 1:
+                hour = candle_time.strftime("%Y-%m-%d %H:00")
+                
+                # Old red line = last downtrend line (prev_st_value when it was downtrend)
+                old_red_line = prev_st_value
+                red_distance = ((close - old_red_line) / old_red_line) * 100
+                
+                # New green line = first uptrend line (current st_value)
+                new_green_line = st_value
+                green_distance = ((close - new_green_line) / new_green_line) * 100
+                
+                results.append((symbol, pct, close, vol_usdt, vm, rsi, direction,
+                               old_red_line, red_distance, new_green_line, green_distance, hour))
         
-        if direction is None or upper_band is None or lower_band is None:
-            return None
-
-        # Calculate breakout distance
-        if direction == 1:  # Downtrend
-            # Distance to lower band (breakout to uptrend)
-            breakout_distance = ((close - lower_band) / lower_band) * 100
-        else:  # Uptrend - we're not interested in these for breakout alerts
-            return None
-
-        # Only return if within breakout range
-        if BREAKOUT_MIN <= breakout_distance <= BREAKOUT_MAX:
-            hour = candle_time.strftime("%Y-%m-%d %H:00")
-            return (symbol, close, vol_usdt, rsi, direction, breakout_distance, hour)
-        
-        return None
+        return results
     except Exception as e:
         print(f"{symbol} error:", e)
-        return None
+        return []
 
 def check_breakouts(symbols):
+    now_utc = datetime.now(timezone.utc)
+    start_time = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
     breakouts = []
 
     with ThreadPoolExecutor(max_workers=60) as ex:
-        for f in as_completed([ex.submit(fetch_breakout_candles, s) for s in symbols]):
-            result = f.result()
-            if result:
-                breakouts.append(result)
+        futures = [ex.submit(fetch_breakout_candles, s, now_utc, start_time) for s in symbols]
+        for f in as_completed(futures):
+            results = f.result()
+            if results:
+                breakouts.extend(results)
 
     return breakouts
 
@@ -232,32 +274,32 @@ def format_breakout_report(fresh, duration):
     if not fresh:
         return None
     
-    # Group by hour
     grouped = defaultdict(list)
     for p in fresh:
-        grouped[p[6]].append(p)
+        grouped[p[11]].append(p)
 
-    report = f"🚀 <b>BREAKOUT ALERTS</b> 🚀\n"
+    report = f"🚀 <b>TREND BREAKOUT ALERTS</b> 🚀\n"
     report += f"⏱ Scan: {duration:.2f}s\n\n"
     
     for h in sorted(grouped):
-        items = sorted(grouped[h], key=lambda x: x[5])  # Sort by breakout distance (closest first)
+        items = sorted(grouped[h], key=lambda x: x[8], reverse=True)
         
         report += f"  ⏰ {h} UTC\n"
         
-        for symbol, close, vol_usdt, rsi, direction, breakout_distance, hour in items:
+        for symbol, pct, close, vol_usdt, vm, rsi, direction, old_red_line, red_distance, new_green_line, green_distance, hour in items:
             sym = symbol.replace("USDT","")
             rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
-            vol_str = format_volume(vol_usdt)
             
-            # Format: Symbol Price RSI Volume Distance
-            line = f"{sym:6s} ${close:8.4f} RSI:{rsi_str:>4s} Vol:{vol_str:>4s}M 🔴-{breakout_distance:.1f}%"
+            line1 = f"{sym:6s} {pct:5.2f} {rsi_str:>4s} {vm:4.1f} {format_volume(vol_usdt):4s}"
+            line2 = f"       🔴Old: ${old_red_line:.5f} (+{red_distance:.2f}%)"
+            line3 = f"       🟢New: ${new_green_line:.5f} (+{green_distance:.2f}%)"
             
-            report += f"🚀 <code>{line}</code>\n"
+            report += f"✅ <code>{line1}</code>\n"
+            report += f"   <code>{line2}</code>\n"
+            report += f"   <code>{line3}</code>\n\n"
         
-        report += "\n"
-    
-    report += "💡 These coins are in DOWNTREND but close to breaking into UPTREND!\n"
+    report += "💡 🔴Old = Last downtrend line (broke above it!)\n"
+    report += "💡 🟢New = New uptrend line (support now)\n"
     
     return report
 
@@ -272,10 +314,9 @@ def main():
         breakouts = check_breakouts(symbols)
         duration = time.time() - start
 
-        # Filter out already reported
         fresh = []
         for b in breakouts:
-            key = (b[0], b[6])  # symbol, hour
+            key = (b[0], b[11])
             if key not in reported:
                 reported.add(key)
                 fresh.append(b)
@@ -286,9 +327,8 @@ def main():
                 print(msg)
                 send_telegram(msg[:4096])
         else:
-            print(f"No breakout opportunities found. Scanned {len(symbols)} pairs in {duration:.2f}s")
+            print(f"No breakouts found. Scanned {len(symbols)} pairs in {duration:.2f}s")
 
-        # Wait until next hour
         server = get_binance_server_time()
         next_hour = (server // 3600 + 1) * 3600
         sleep_time = max(0, next_hour - server + 1)
