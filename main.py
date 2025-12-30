@@ -186,7 +186,7 @@ def get_usdt_pairs():
 
 def fetch_breakout_candles(symbol, now_utc, start_time):
     try:
-        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=100"
+        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=20"
         candles = session.get(url, timeout=60).json()
         if not candles or isinstance(candles, dict):
             return []
