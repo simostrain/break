@@ -11,7 +11,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 RSI_PERIOD = 14
 SUPPORT_MIN = 0.0  # Minimum distance from support (0%)
-SUPPORT_MAX = 2.4  # Maximum distance from support (3%)
+SUPPORT_MAX = 0.5  # Maximum distance from support (3%)
 reported = set()  # avoid duplicate (symbol, hour)
 
 CUSTOM_TICKERS = [
@@ -208,7 +208,7 @@ def get_usdt_pairs():
 
 def fetch_support_touch(symbol, now_utc, start_time):
     try:
-        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=100"
+        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=20"
         candles = session.get(url, timeout=60).json()
         if not candles or isinstance(candles, dict):
             return []
