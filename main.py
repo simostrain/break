@@ -11,7 +11,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 RSI_PERIOD = 14
 SUPPORT_MIN = 0.0  # Minimum distance from support (0%)
-SUPPORT_MAX = 0.5  # Maximum distance from support (0.5%)
+SUPPORT_MAX = 0.1  # Maximum distance from support (0.5%)
 reported = set()  # avoid duplicate (symbol, hour)
 
 CUSTOM_TICKERS = [
