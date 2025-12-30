@@ -1,247 +1,236 @@
-import requests
+import os
 import time
-from datetime import datetime, timezone
+import requests
+import pandas as pd
+import pandas_ta as ta
+from datetime import datetime, timezone, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import defaultdict
 
-# Test with these 4 coins
-TEST_SYMBOLS = ["MANTAUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT"]
+# ==== Settings ====
 BINANCE_API = "https://api.binance.com"
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+RSI_PERIOD = 14
+SUPERTREND_LEN = 10
+SUPERTREND_MULT = 3
+
+SUPPORT_MIN = 0.0
+SUPPORT_MAX = 3.0
+
+reported = set()
+
+CUSTOM_TICKERS = [
+    "BTC","ETH","BNB","SOL","XRP","ADA","AVAX","LINK","DOT","MATIC",
+    "OP","ARB","ATOM","NEAR","FIL","ICP","AAVE","UNI","SUI","SEI",
+    "TRX","LTC","ETC","DOGE","SHIB","TON","APT","INJ","RUNE","KAS",
+    "ZRO","ZK","TIA","JUP","WLD","PEPE","PYTH","ORDI","RNDR","GALA"
+]
+
+# ==== Session ====
 session = requests.Session()
+adapter = requests.adapters.HTTPAdapter(pool_connections=50, pool_maxsize=50, max_retries=2)
+session.mount("https://", adapter)
 
-def calculate_atr_rma(candles, current_index, period=10):
-    """
-    Calculate ATR using RMA (same as Pine Script atr() function)
-    """
-    if current_index < period:
+# ==== Telegram ====
+def send_telegram(msg):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            data={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"},
+            timeout=30
+        )
+    except Exception as e:
+        print("Telegram error:", e)
+
+# ==== Utils ====
+def format_volume(v):
+    return f"{v/1_000_000:.2f}M"
+
+def get_binance_server_time():
+    try:
+        return session.get(f"{BINANCE_API}/api/v3/time", timeout=30).json()["serverTime"] / 1000
+    except:
+        return time.time()
+
+# ==== RSI ====
+def calculate_rsi_with_full_history(closes, period=14):
+    if len(closes) < period + 1:
         return None
-    
-    # Calculate all TRs
-    trs = []
-    for i in range(1, current_index + 1):
-        high = float(candles[i][2])
-        low = float(candles[i][3])
-        prev_close = float(candles[i-1][4])
-        
-        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
-        trs.append(tr)
-    
-    # First ATR is SMA
-    atr = sum(trs[:period]) / period
-    
-    # Then use RMA (Wilder's smoothing)
-    for i in range(period, len(trs)):
-        atr = (atr * (period - 1) + trs[i]) / period
-    
-    return atr
 
-def calculate_supertrend(candles, current_index, atr_period=10, multiplier=3.0):
-    """
-    Calculate Supertrend - Direct translation from Pine Script by kivancOzbilgic
-    Source: https://stackoverflow.com/a/78996666
-    Posted by Muhammad Saqib Scientist
-    Retrieved 2025-12-30, License - CC BY-SA 4.0
-    
-    Returns: (supertrend_value, direction, upper_band, lower_band)
-    direction = 1 for uptrend, -1 for downtrend
-    """
-    if current_index < atr_period:
+    changes = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+    gains = [max(c, 0) for c in changes]
+    losses = [max(-c, 0) for c in changes]
+
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+
+    if avg_loss == 0:
+        return 100.0
+
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 2)
+
+# ==== BINANCE / TRADINGVIEW SUPERTREND ====
+def calculate_supertrend_binance(candles, index):
+    if index < SUPERTREND_LEN:
         return None, None, None, None
-    
-    # Arrays to store values
-    up_list = []
-    dn_list = []
-    trend_list = []
-    atr_list = []
-    
-    # Calculate from atr_period to current_index
-    for idx in range(atr_period, current_index + 1):
-        # Get current candle
-        high = float(candles[idx][2])
-        low = float(candles[idx][3])
-        close = float(candles[idx][4])
-        
-        # src = hl2
-        src = (high + low) / 2
-        
-        # Calculate ATR using RMA
-        atr = calculate_atr_rma(candles, idx, atr_period)
-        atr_list.append(atr)
-        
-        # up = src - (Multiplier * atr)
-        up = src - (multiplier * atr)
-        
-        # up1 = nz(up[1], up)
-        up1 = up_list[-1] if len(up_list) > 0 else up
-        
-        # Get previous close
-        prev_close = float(candles[idx-1][4]) if idx > 0 else close
-        
-        # up := close[1] > up1 ? max(up, up1) : up
-        if prev_close > up1:
-            up = max(up, up1)
-        
-        up_list.append(up)
-        
-        # dn = src + (Multiplier * atr)
-        dn = src + (multiplier * atr)
-        
-        # dn1 = nz(dn[1], dn)
-        dn1 = dn_list[-1] if len(dn_list) > 0 else dn
-        
-        # dn := close[1] < dn1 ? min(dn, dn1) : dn
-        if prev_close < dn1:
-            dn = min(dn, dn1)
-        
-        dn_list.append(dn)
-        
-        # Determine trend
-        if idx == atr_period:
-            # trend = 1 (start with uptrend)
-            trend = 1
-        else:
-            prev_trend = trend_list[-1]
-            prev_up = up_list[-2]
-            prev_dn = dn_list[-2]
-            
-            # trend := trend == -1 and close > dn1 ? 1 : trend == 1 and close < up1 ? -1 : trend
-            if prev_trend == -1 and close > prev_dn:
-                trend = 1  # Switch to uptrend
-            elif prev_trend == 1 and close < prev_up:
-                trend = -1  # Switch to downtrend
-            else:
-                trend = prev_trend  # Stay in same trend
-        
-        trend_list.append(trend)
-    
-    # Return last values
-    last_trend = trend_list[-1]
-    last_up = up_list[-1]
-    last_dn = dn_list[-1]
-    
-    if last_trend == 1:
-        # Uptrend: supertrend = up, resistance = dn
-        return last_up, last_trend, last_dn, last_up
-    else:
-        # Downtrend: supertrend = dn, support = up
-        return last_dn, last_trend, last_dn, last_up
 
-def test_supertrend():
-    print("="*80)
-    print("SUPERTREND TEST - Compare with Binance")
-    print("="*80)
-    print("\nFetching latest candles for 4 coins...\n")
-    
-    for symbol in TEST_SYMBOLS:
-        try:
-            # Fetch 50 hourly candles
-            url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=50"
-            candles = session.get(url, timeout=60).json()
-            
-            if not candles or isinstance(candles, dict):
-                print(f"{symbol}: Error fetching data")
+    df = pd.DataFrame({
+        "high":  [float(c[2]) for c in candles[:index+1]],
+        "low":   [float(c[3]) for c in candles[:index+1]],
+        "close": [float(c[4]) for c in candles[:index+1]],
+    })
+
+    st = df.ta.supertrend(length=SUPERTREND_LEN, multiplier=SUPERTREND_MULT)
+    if st is None or st.empty:
+        return None, None, None, None
+
+    s = f"{SUPERTREND_LEN}_{float(SUPERTREND_MULT)}"
+
+    return (
+        st[f"SUPERT_{s}"].iloc[-1],   # active line
+        st[f"SUPERTd_{s}"].iloc[-1],  # -1 up | 1 down
+        st[f"SUPERTu_{s}"].iloc[-1],  # resistance
+        st[f"SUPERTl_{s}"].iloc[-1],  # support
+    )
+
+# ==== Binance ====
+def get_usdt_pairs():
+    wanted = [t.upper() + "USDT" for t in CUSTOM_TICKERS]
+    try:
+        info = session.get(f"{BINANCE_API}/api/v3/exchangeInfo", timeout=30).json()
+        valid = {s["symbol"] for s in info["symbols"]
+                 if s["status"] == "TRADING" and s["quoteAsset"] == "USDT"}
+        pairs = [s for s in wanted if s in valid]
+        print(f"Loaded {len(pairs)} pairs")
+        return pairs
+    except Exception as e:
+        print("Exchange info error:", e)
+        return []
+
+def fetch_support_touch(symbol, now_utc, start_time):
+    try:
+        candles = session.get(
+            f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=200",
+            timeout=30
+        ).json()
+
+        if not candles or isinstance(candles, dict):
+            return []
+
+        results = []
+
+        for i in range(1, len(candles)-1):
+            candle_time = datetime.fromtimestamp(candles[i][0]/1000, tz=timezone.utc)
+            if candle_time < start_time or candle_time >= now_utc - timedelta(hours=1):
                 continue
-            
-            # Get the latest COMPLETED candle (second to last)
-            current_index = len(candles) - 2
-            
-            # Get candle info
-            candle = candles[current_index]
-            candle_time = datetime.fromtimestamp(candle[0]/1000, tz=timezone.utc)
-            open_price = float(candle[1])
-            high = float(candle[2])
-            low = float(candle[3])
-            close = float(candle[4])
-            hl2 = (high + low) / 2
-            
-            # Calculate Supertrend with debug info
-            st_value, direction, upper_band, lower_band = calculate_supertrend(candles, current_index)
-            
-            # Also calculate ATR separately for display
-            all_trs = []
-            for i in range(1, current_index + 1):
-                h = float(candles[i][2])
-                l = float(candles[i][3])
-                pc = float(candles[i-1][4])
-                tr = max(h - l, abs(h - pc), abs(l - pc))
-                all_trs.append(tr)
-            
-            # Calculate current ATR
-            atr_period = 10
-            if current_index >= atr_period:
-                # First ATR
-                first_atr = sum(all_trs[:atr_period]) / atr_period
-                # Current ATR (RMA)
-                current_atr = first_atr
-                for i in range(atr_period, current_index):
-                    current_atr = ((current_atr * (atr_period - 1)) + all_trs[i]) / atr_period
-            else:
-                current_atr = None
-            
-            if st_value is None:
-                print(f"{symbol}: Not enough data")
+
+            close = float(candles[i][4])
+            prev_close = float(candles[i-1][4])
+            pct = (close - prev_close) / prev_close * 100
+
+            volume = float(candles[i][5])
+            vol_usdt = volume * float(candles[i][1])
+
+            ma_vol = [
+                float(candles[j][1]) * float(candles[j][5])
+                for j in range(max(0, i-19), i+1)
+            ]
+            vm = vol_usdt / (sum(ma_vol)/len(ma_vol))
+
+            closes = [float(candles[j][4]) for j in range(i+1)]
+            rsi = calculate_rsi_with_full_history(closes)
+
+            st, direction, upper, lower = calculate_supertrend_binance(candles, i)
+            if direction != -1:
                 continue
-            
-            # Determine trend name
-            if direction == 1:
-                trend_name = "UPTREND 🟢"
-                support = st_value
-                resistance = upper_band
-            else:
-                trend_name = "DOWNTREND 🔴"
-                support = lower_band
-                resistance = st_value
-            
-            # Print results
-            print(f"{'='*80}")
-            print(f"Symbol: {symbol}")
-            print(f"Time:   {candle_time.strftime('%Y-%m-%d %H:%M')} UTC")
-            print(f"{'='*80}")
-            print(f"High:       ${high:.8f}")
-            print(f"Low:        ${low:.8f}")
-            print(f"Close:      ${close:.8f}")
-            print(f"HL2:        ${hl2:.8f}")
-            if current_atr:
-                print(f"ATR:        ${current_atr:.8f}")
-            print(f"Trend:      {trend_name}")
-            print(f"-"*80)
-            print(f"Supertrend: ${st_value:.8f}")
-            print(f"Upper Band: ${upper_band:.8f}")
-            print(f"Lower Band: ${lower_band:.8f}")
-            
-            # Calculate distances
-            if direction == 1:  # Uptrend
-                dist_to_support = ((close - support) / support) * 100
-                dist_to_resistance = ((resistance - close) / close) * 100
-                print(f"-"*80)
-                print(f"Distance to Support:    +{dist_to_support:.2f}%")
-                print(f"Distance to Resistance: +{dist_to_resistance:.2f}%")
-            else:  # Downtrend
-                dist_to_resistance = ((close - resistance) / resistance) * 100
-                dist_to_support = ((support - close) / close) * 100
-                print(f"-"*80)
-                print(f"Distance to Resistance: {dist_to_resistance:.2f}%")
-                print(f"Distance to Support:    +{dist_to_support:.2f}%")
-            
-            print()
-            
-        except Exception as e:
-            print(f"{symbol}: Error - {e}")
-            import traceback
-            traceback.print_exc()
-            continue
-    
-    print("="*80)
-    print("Compare these values with Binance chart:")
-    print("1. Open Binance")
-    print("2. Select 1H timeframe")
-    print("3. Add Supertrend indicator (ATR: 10, Factor: 3.0)")
-    print("4. Check the latest COMPLETED candle values")
-    print("\nExpected Binance values:")
-    print("  BTC: 88441.11")
-    print("  ETH: 2981.7")
-    print("  BNB: 860.45")
-    print("  ADA: 0.3602")
-    print("="*80)
+
+            dist_sup = (close - lower) / lower * 100
+            if SUPPORT_MIN <= dist_sup <= SUPPORT_MAX:
+                hour = candle_time.strftime("%Y-%m-%d %H:00")
+                dist_res = (upper - close) / close * 100
+
+                results.append((
+                    symbol, pct, close, vol_usdt, vm, rsi,
+                    lower, dist_sup, upper, dist_res, hour
+                ))
+
+        return results
+    except Exception as e:
+        print(symbol, e)
+        return []
+
+def check_support_touches(symbols):
+    now_utc = datetime.now(timezone.utc)
+    start_time = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    all_hits = []
+    with ThreadPoolExecutor(max_workers=40) as ex:
+        futures = [ex.submit(fetch_support_touch, s, now_utc, start_time) for s in symbols]
+        for f in as_completed(futures):
+            all_hits.extend(f.result())
+
+    return all_hits
+
+def format_report(rows, duration):
+    if not rows:
+        return None
+
+    grouped = defaultdict(list)
+    for r in rows:
+        grouped[r[-1]].append(r)
+
+    msg = f"📍 <b>SUPERTREND SUPPORT TOUCH</b>\n⏱ {duration:.2f}s\n\n"
+
+    for hour in sorted(grouped):
+        msg += f"⏰ {hour} UTC\n"
+        for s,p,c,v,vm,r,sl,ds,rl,dr,h in sorted(grouped[hour], key=lambda x: x[7]):
+            sym = s.replace("USDT","")
+            msg += (
+                f"🎯 <code>{sym:5s} {p:5.2f}% RSI:{r:5.1f} VM:{vm:4.1f}</code>\n"
+                f"   🟢 Sup {sl:.5f} (+{ds:.2f}%)\n"
+                f"   🔴 Res {rl:.5f} (🎯+{dr:.2f}%)\n\n"
+            )
+
+    return msg
+
+# ==== MAIN ====
+def main():
+    symbols = get_usdt_pairs()
+    if not symbols:
+        return
+
+    while True:
+        start = time.time()
+        hits = check_support_touches(symbols)
+        duration = time.time() - start
+
+        fresh = []
+        for h in hits:
+            key = (h[0], h[-1])
+            if key not in reported:
+                reported.add(key)
+                fresh.append(h)
+
+        if fresh:
+            msg = format_report(fresh, duration)
+            if msg:
+                print(msg)
+                send_telegram(msg[:4096])
+        else:
+            print("No signals")
+
+        server = get_binance_server_time()
+        sleep = max(0, (server//3600 + 1)*3600 - server + 1)
+        time.sleep(sleep)
 
 if __name__ == "__main__":
-    test_supertrend()
+    main()
