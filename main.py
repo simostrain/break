@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 
 # ==== Settings ====
-BINANCE_API = "https://api.binance.com  "
+BINANCE_API = "https://api.binance.com"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 RSI_PERIOD = 14
@@ -38,7 +38,7 @@ session.mount("https://", adapter)
 
 # ==== Telegram ====
 def send_telegram(msg):
-    url = f"https://api.telegram.org/bot  {TELEGRAM_BOT_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
         requests.post(url, data={
             "chat_id": TELEGRAM_CHAT_ID,
@@ -87,74 +87,88 @@ def calculate_rsi_with_full_history(closes, period=14):
     
     return round(rsi, 2)
 
-# ==== Supertrend Calculation (OPTIMIZED) ====
+# ==== Supertrend Calculation ====
+# Source - https://stackoverflow.com/a/78996666
+# Posted by Muhammad Saqib Scientist
+# Retrieved 2025-12-30, License - CC BY-SA 4.0
+def calculate_atr_rma(candles, current_index, period=10):
+    """Calculate ATR using RMA (same as Pine Script atr() function)"""
+    if current_index < period:
+        return None
+    
+    trs = []
+    for i in range(1, current_index + 1):
+        high = float(candles[i][2])
+        low = float(candles[i][3])
+        prev_close = float(candles[i-1][4])
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        trs.append(tr)
+    
+    atr = sum(trs[:period]) / period
+    for i in range(period, len(trs)):
+        atr = (atr * (period - 1) + trs[i]) / period
+    
+    return atr
+
 def calculate_supertrend(candles, current_index, atr_period=10, multiplier=3.0):
     """
-    Optimized Supertrend - fast, low CPU/RAM.
+    Calculate Supertrend - Direct translation from Pine Script by kivancOzbilgic
     Returns: (supertrend_value, direction, upper_band, lower_band)
     direction = 1 for uptrend, -1 for downtrend
     """
     if current_index < atr_period:
         return None, None, None, None
-
-    # Parse only needed candles once
-    highs = [float(c[2]) for c in candles[:current_index+1]]
-    lows = [float(c[3]) for c in candles[:current_index+1]]
-    closes = [float(c[4]) for c in candles[:current_index+1]]
-    n = len(closes)
-
-    # Compute True Range
-    tr = [0.0] * n
-    tr[0] = highs[0] - lows[0]
-    for i in range(1, n):
-        tr[i] = max(
-            highs[i] - lows[i],
-            abs(highs[i] - closes[i-1]),
-            abs(lows[i] - closes[i-1])
-        )
-
-    # Compute ATR using RMA
-    atr = [0.0] * n
-    atr_sum = sum(tr[1:atr_period+1])
-    atr[atr_period] = atr_sum / atr_period
-    for i in range(atr_period+1, n):
-        atr[i] = (atr[i-1] * (atr_period - 1) + tr[i]) / atr_period
-
-    # Compute bands and trend up to current_index
-    src = [(highs[i] + lows[i]) / 2.0 for i in range(n)]
-    upper_band = [0.0] * n
-    lower_band = [0.0] * n
-    direction = [0] * n
-
-    # Initialize at atr_period
-    i0 = atr_period
-    upper_band[i0] = src[i0] + multiplier * atr[i0]
-    lower_band[i0] = src[i0] - multiplier * atr[i0]
-    direction[i0] = 1 if closes[i0] > upper_band[i0] else -1
-
-    for i in range(i0 + 1, n):
-        basic_ub = src[i] + multiplier * atr[i]
-        basic_lb = src[i] - multiplier * atr[i]
-
-        if closes[i-1] <= upper_band[i-1]:
-            upper_band[i] = min(basic_ub, upper_band[i-1])
+    
+    up_list = []
+    dn_list = []
+    trend_list = []
+    
+    for idx in range(atr_period, current_index + 1):
+        high = float(candles[idx][2])
+        low = float(candles[idx][3])
+        close = float(candles[idx][4])
+        src = (high + low) / 2
+        
+        atr = calculate_atr_rma(candles, idx, atr_period)
+        up = src - (multiplier * atr)
+        up1 = up_list[-1] if len(up_list) > 0 else up
+        prev_close = float(candles[idx-1][4]) if idx > 0 else close
+        
+        if prev_close > up1:
+            up = max(up, up1)
+        up_list.append(up)
+        
+        dn = src + (multiplier * atr)
+        dn1 = dn_list[-1] if len(dn_list) > 0 else dn
+        
+        if prev_close < dn1:
+            dn = min(dn, dn1)
+        dn_list.append(dn)
+        
+        if idx == atr_period:
+            trend = 1
         else:
-            upper_band[i] = basic_ub
-
-        if closes[i-1] >= lower_band[i-1]:
-            lower_band[i] = max(basic_lb, lower_band[i-1])
-        else:
-            lower_band[i] = basic_lb
-
-        if direction[i-1] == -1 and closes[i] > upper_band[i-1]:
-            direction[i] = 1
-        elif direction[i-1] == 1 and closes[i] < lower_band[i-1]:
-            direction[i] = -1
-        else:
-            direction[i] = direction[i-1]
-
-    st_value = lower_band[current_index] if direction[current_index] == 1 else upper_band[current_index]
-    return st_value, direction[current_index], upper_band[current_index], lower_band[current_index]
+            prev_trend = trend_list[-1]
+            prev_up = up_list[-2]
+            prev_dn = dn_list[-2]
+            
+            if prev_trend == -1 and close > prev_dn:
+                trend = 1
+            elif prev_trend == 1 and close < prev_up:
+                trend = -1
+            else:
+                trend = prev_trend
+        
+        trend_list.append(trend)
+    
+    last_trend = trend_list[-1]
+    last_up = up_list[-1]
+    last_dn = dn_list[-1]
+    
+    if last_trend == 1:
+        return last_up, last_trend, last_dn, last_up
+    else:
+        return last_dn, last_trend, last_dn, last_up
 
 # ==== Binance ====
 def get_usdt_pairs():
