@@ -197,7 +197,7 @@ def quick_scan(symbol):
     Returns: ('pump', basic_data) or ('breakout', basic_data) or (None, None)
     """
     try:
-        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=100"
+        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=50"
         candles = session.get(url, timeout=5).json()
         
         if not candles or isinstance(candles, dict) or len(candles) < 20:
