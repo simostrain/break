@@ -282,17 +282,17 @@ def quick_scan(symbol):
     except:
         return None, None
 
-# ==== STAGE 2: DEEP ANALYSIS (250 candles for csince only) ====
+# ==== STAGE 2: DEEP ANALYSIS (500 candles for csince only) ====
 def calculate_csince_pump(symbol, current_pct):
     """
-    Stage 2: Fetch 250 candles ONLY to calculate candles since last pump.
+    Stage 2: Fetch 500 candles ONLY to calculate candles since last pump.
     """
     try:
-        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=250"
+        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=500"
         candles = session.get(url, timeout=5).json()
         
         if not candles or isinstance(candles, dict):
-            return 250
+            return 500
         
         # Start from second-to-last (last closed candle)
         last_idx = len(candles) - 2
@@ -305,26 +305,26 @@ def calculate_csince_pump(symbol, current_pct):
             if prev_pct >= PUMP_THRESHOLD:
                 return last_idx - i
         
-        return 250
+        return 500
         
     except:
-        return 250
+        return 500
 
 def calculate_csince_breakout(symbol):
     """
-    Stage 2: Fetch 250 candles ONLY to calculate candles since last breakout.
+    Stage 2: Fetch 500 candles ONLY to calculate candles since last breakout.
     """
     try:
-        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=250"
+        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=500"
         candles = session.get(url, timeout=5).json()
         
         if not candles or isinstance(candles, dict):
-            return 250
+            return 500
         
         last_idx = len(candles) - 2
         
         # Look backwards for previous breakout
-        for look_back in range(1, min(250, last_idx)):
+        for look_back in range(1, min(500, last_idx)):
             check_idx = last_idx - look_back
             if check_idx < 15:
                 break
@@ -335,17 +335,17 @@ def calculate_csince_breakout(symbol):
                 if prev_trend == -1 and last_trend == 1:
                     return look_back
         
-        return 250
+        return 500
         
     except:
-        return 250
+        return 500
 
 # ==== MAIN SCANNING LOGIC ====
 def scan_all_symbols(symbols):
     """
     Two-stage scanning:
     Stage 1: Quick scan all symbols with 24 candles
-    Stage 2: Deep analysis only for detected pumps/breakouts (250 candles for csince)
+    Stage 2: Deep analysis only for detected pumps/breakouts (500 candles for csince)
     """
     pump_candidates = []
     breakout_candidates = []
@@ -496,7 +496,7 @@ def main():
     print("🚀 ULTRA-FAST CRYPTO SCANNER - TWO-STAGE ANALYSIS")
     print("="*80)
     print(f"⚡ Stage 1: Quick scan with 24 candles (ALL symbols)")
-    print(f"🔬 Stage 2: Deep analysis with 250 candles (DETECTED coins only)")
+    print(f"🔬 Stage 2: Deep analysis with 500 candles (DETECTED coins only)")
     print(f"📊 PUMP → Bot 1 | 📈 BREAKOUT → Bot 2")
     print("="*80)
     
