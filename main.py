@@ -190,14 +190,14 @@ def get_usdt_pairs():
         print(f"✗ Exchange info error: {e}")
         return []
 
-# ==== STAGE 1: QUICK DETECTION (50 candles) ====
+# ==== STAGE 1: QUICK DETECTION (100 candles) ====
 def quick_scan(symbol):
     """
-    Stage 1: Quick scan with 50 candles to detect pump or breakout.
+    Stage 1: Quick scan with 100 candles to detect pump or breakout.
     Returns: ('pump', basic_data) or ('breakout', basic_data) or (None, None)
     """
     try:
-        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=50"
+        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=100"
         candles = session.get(url, timeout=5).json()
         
         if not candles or isinstance(candles, dict) or len(candles) < 20:
@@ -218,14 +218,14 @@ def quick_scan(symbol):
         vol_usdt = open_p * volume
         pct = ((close - prev_close) / prev_close) * 100
         
-        # Calculate basic metrics (we have enough data with 50 candles)
+        # Calculate basic metrics (we have enough data with 100 candles)
         # Volume multiplier (20-candle MA)
         ma_start = max(0, last_idx - 19)
         ma_vol = [float(candles[j][1]) * float(candles[j][5]) for j in range(ma_start, last_idx + 1)]
         ma = sum(ma_vol) / len(ma_vol)
         vm = vol_usdt / ma if ma > 0 else 1.0
         
-        # RSI (we have 50 candles, enough for RSI-14)
+        # RSI (we have 100 candles, enough for RSI-14)
         all_closes = [float(candles[j][4]) for j in range(0, last_idx + 1)]
         rsi = calculate_rsi(all_closes, RSI_PERIOD)
         
@@ -258,7 +258,7 @@ def quick_scan(symbol):
             'vol_usdt': vol_usdt,
             'vm': vm,
             'rsi': rsi,
-            'candles_50': candles  # Keep candles for potential later use
+            'candles_100': candles  # Keep candles for potential later use
         }
         
         if is_pump and is_breakout:
@@ -282,49 +282,49 @@ def quick_scan(symbol):
     except:
         return None, None
 
-# ==== STAGE 2: DEEP ANALYSIS (250 candles for csince only) ====
+# ==== STAGE 2: DEEP ANALYSIS (2100 candles for csince only) ====
 def calculate_csince_pump(symbol, current_pct):
     """
-    Stage 2: Fetch 250 candles ONLY to calculate candles since last pump.
+    Stage 2: Fetch 2100 candles ONLY to calculate candles since last pump.
     """
     try:
-        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=250"
+        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=2100"
         candles = session.get(url, timeout=5).json()
         
         if not candles or isinstance(candles, dict):
-            return 250
+            return 2100
         
         # Start from second-to-last (last closed candle)
         last_idx = len(candles) - 2
         
         # Look backwards for previous pump
-        for i in range(last_idx - 1, max(0, last_idx - 509), -1):
+        for i in range(last_idx - 1, max(0, last_idx - 1009), -1):
             if i == 0:
                 break
             prev_pct = ((float(candles[i][4]) - float(candles[i-1][4])) / float(candles[i-1][4])) * 100
             if prev_pct >= PUMP_THRESHOLD:
                 return last_idx - i
         
-        return 250
+        return 2100
         
     except:
-        return 250
+        return 2100
 
 def calculate_csince_breakout(symbol):
     """
-    Stage 2: Fetch 250 candles ONLY to calculate candles since last breakout.
+    Stage 2: Fetch 2100 candles ONLY to calculate candles since last breakout.
     """
     try:
-        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=250"
+        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=2100"
         candles = session.get(url, timeout=5).json()
         
         if not candles or isinstance(candles, dict):
-            return 250
+            return 2100
         
         last_idx = len(candles) - 2
         
         # Look backwards for previous breakout
-        for look_back in range(1, min(250, last_idx)):
+        for look_back in range(1, min(2100, last_idx)):
             check_idx = last_idx - look_back
             if check_idx < 15:
                 break
@@ -335,26 +335,26 @@ def calculate_csince_breakout(symbol):
                 if prev_trend == -1 and last_trend == 1:
                     return look_back
         
-        return 250
+        return 2100
         
     except:
-        return 250
+        return 2100
 
 # ==== MAIN SCANNING LOGIC ====
 def scan_all_symbols(symbols):
     """
     Two-stage scanning:
-    Stage 1: Quick scan all symbols with 50 candles
-    Stage 2: Deep analysis only for detected pumps/breakouts (250 candles for csince)
+    Stage 1: Quick scan all symbols with 100 candles
+    Stage 2: Deep analysis only for detected pumps/breakouts (2100 candles for csince)
     """
     pump_candidates = []
     breakout_candidates = []
     
-    print(f"🔍 Stage 1: Quick scanning {len(symbols)} symbols with 50 candles...")
+    print(f"🔍 Stage 1: Quick scanning {len(symbols)} symbols with 100 candles...")
     stage1_start = time.time()
     
     # Stage 1: Quick scan
-    with ThreadPoolExecutor(max_workers=150) as ex:
+    with ThreadPoolExecutor(max_workers=1100) as ex:
         futures = {ex.submit(quick_scan, s): s for s in symbols}
         
         for f in as_completed(futures):
@@ -382,7 +382,7 @@ def scan_all_symbols(symbols):
         
         # Calculate csince for pumps
         if pump_candidates:
-            with ThreadPoolExecutor(max_workers=50) as ex:
+            with ThreadPoolExecutor(max_workers=100) as ex:
                 futures = {ex.submit(calculate_csince_pump, d['symbol'], d['pct']): d for d in pump_candidates}
                 
                 for f in as_completed(futures):
@@ -396,7 +396,7 @@ def scan_all_symbols(symbols):
         
         # Calculate csince for breakouts
         if breakout_candidates:
-            with ThreadPoolExecutor(max_workers=50) as ex:
+            with ThreadPoolExecutor(max_workers=100) as ex:
                 futures = {ex.submit(calculate_csince_breakout, d['symbol']): d for d in breakout_candidates}
                 
                 for f in as_completed(futures):
@@ -444,7 +444,7 @@ def format_pump_report(pumps, duration):
                     icon = "✅"
                 elif rsi >= 66:
                     icon = "🔴"
-                elif rsi >= 50:
+                elif rsi >= 100:
                     icon = "🟢"
                 else:
                     icon = "🟡"
@@ -495,8 +495,8 @@ def main():
     print("="*80)
     print("🚀 ULTRA-FAST CRYPTO SCANNER - TWO-STAGE ANALYSIS")
     print("="*80)
-    print(f"⚡ Stage 1: Quick scan with 50 candles (ALL symbols)")
-    print(f"🔬 Stage 2: Deep analysis with 250 candles (DETECTED coins only)")
+    print(f"⚡ Stage 1: Quick scan with 100 candles (ALL symbols)")
+    print(f"🔬 Stage 2: Deep analysis with 2100 candles (DETECTED coins only)")
     print(f"📊 PUMP → Bot 1 | 📈 BREAKOUT → Bot 2")
     print("="*80)
     
