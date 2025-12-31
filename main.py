@@ -270,14 +270,25 @@ def fetch_candles(symbol, now_utc, pump_start_time, breakout_start_time):
         pump_results = []
         breakout_results = []
         
-        # First pass: identify all pump indices
+        # First pass: identify all pump indices and breakout indices
         pump_indices = []
+        breakout_indices = []
+        
         for i in range(1, len(candles)):
+            # Track pumps
             prev_close = float(candles[i-1][4])
             close = float(candles[i][4])
             pct = ((close - prev_close) / prev_close) * 100
             if pct >= PUMP_THRESHOLD:
                 pump_indices.append(i)
+            
+            # Track breakouts (need supertrend history)
+            if i >= 14:  # Need enough history for supertrend
+                st_value, direction, _, _ = calculate_supertrend(candles, i)
+                if direction is not None and i > 0:
+                    prev_st_value, prev_direction, _, _ = calculate_supertrend(candles, i-1)
+                    if prev_direction == -1 and direction == 1:
+                        breakout_indices.append(i)
         
         # Second pass: process each candle for both pump and breakout detection
         for i, c in enumerate(candles):
@@ -345,6 +356,14 @@ def fetch_candles(symbol, now_utc, pump_start_time, breakout_start_time):
                 
                 # Check if trend JUST CHANGED from downtrend to uptrend
                 if prev_direction == -1 and direction == 1:
+                    # Calculate candles since last breakout
+                    prev_breakouts = [idx for idx in breakout_indices if idx < i]
+                    if prev_breakouts:
+                        last_breakout_index = prev_breakouts[-1]
+                        candles_since_last = i - last_breakout_index
+                    else:
+                        candles_since_last = 250
+                    
                     hour = candle_time.strftime("%Y-%m-%d %H:00")
                     
                     old_red_line = prev_st_value
@@ -354,7 +373,7 @@ def fetch_candles(symbol, now_utc, pump_start_time, breakout_start_time):
                     green_distance = ((close - new_green_line) / new_green_line) * 100
                     
                     breakout_results.append((symbol, pct, close, vol_usdt, vm, rsi, direction,
-                                           old_red_line, red_distance, new_green_line, green_distance, hour))
+                                           old_red_line, red_distance, new_green_line, green_distance, candles_since_last, hour))
 
         return pump_results, breakout_results
         
@@ -390,7 +409,7 @@ def check_pumps_and_breakouts(symbols):
             if breakout_res:
                 breakouts.extend(breakout_res)
                 for r in breakout_res:
-                    print(f"  Found BREAKOUT: {r[0]} at {r[11]} - trend reversal")
+                    print(f"  Found BREAKOUT: {r[0]} at {r[12]} - trend reversal")
 
     return pumps, breakouts
 
@@ -443,28 +462,32 @@ def format_breakout_report(fresh, duration):
     
     grouped = defaultdict(list)
     for p in fresh:
-        grouped[p[11]].append(p)
+        grouped[p[12]].append(p)  # Note: hour is now at index 12
 
     report = f"🚀 <b>TREND BREAKOUT ALERTS</b> 🚀\n"
     report += f"⏱ Scan: {duration:.2f}s\n\n"
     
     for h in sorted(grouped):
-        items = sorted(grouped[h], key=lambda x: x[8], reverse=True)
+        items = sorted(grouped[h], key=lambda x: x[8], reverse=True)  # Sort by red_distance
         
         report += f"  ⏰ {h} UTC\n"
         
-        for symbol, pct, close, vol_usdt, vm, rsi, direction, old_red_line, red_distance, new_green_line, green_distance, hour in items:
+        for symbol, pct, close, vol_usdt, vm, rsi, direction, old_red_line, red_distance, new_green_line, green_distance, csince, hour in items:
             sym = symbol.replace("USDT","")
             rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
+            csince_str = f"{csince:03d}"
             
-            line1 = f"{sym:6s} {pct:5.2f} {rsi_str:>4s} {vm:4.1f} {format_volume(vol_usdt):4s}"
+            # Main line without emoji, with csince at the end
+            line1 = f"{sym:6s} {pct:5.2f} {rsi_str:>4s} {vm:4.1f} {format_volume(vol_usdt):4s} {csince_str}"
             line2 = f"       🔴Old: ${old_red_line:.5f} (+{red_distance:.2f}%)"
             line3 = f"       🟢New: ${new_green_line:.5f} (+{green_distance:.2f}%)"
             
-            report += f"✅ <code>{line1}</code>\n"
+            report += f"<code>{line1}</code>\n"
             report += f"   <code>{line2}</code>\n"
-            report += f"   <code>{line3}</code>\n\n"
+            report += f"   <code>{line3}</code>\n"
         
+        report += "\n"
+    
     report += "💡 🔴Old = Last downtrend line (broke above it!)\n"
     report += "💡 🟢New = New uptrend line (support now)\n"
     
@@ -533,7 +556,7 @@ def main():
         # === PROCESS BREAKOUTS ===
         fresh_breakouts = []
         for b in breakouts:
-            key = (b[0], b[11])
+            key = (b[0], b[12])  # hour is now at index 12
             if key not in reported_breakouts:
                 reported_breakouts.add(key)
                 fresh_breakouts.append(b)
