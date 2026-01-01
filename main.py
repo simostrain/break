@@ -13,8 +13,8 @@ RSI_PERIOD = 14
 reported = set()  # avoid duplicate (symbol, hour)
 
 # ==== FILTER SETTINGS ====
-MIN_VM = 3           # Strong volume
-MIN_RSI = 55           # Healthy momentum
+MIN_VM = 0.1           # Strong volume
+MIN_RSI = 50           # Healthy momentum
 MAX_RSI = 70           # Not exhausted
 MIN_GREEN_DISTANCE = 2.0  # Confirmed close above new support (in %)
 
