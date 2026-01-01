@@ -12,12 +12,6 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 RSI_PERIOD = 14
 reported = set()  # avoid duplicate (symbol, hour)
 
-# ==== FILTER SETTINGS ====
-MIN_VM = 1           # Strong volume
-MIN_RSI = 50           # Healthy momentum
-MAX_RSI = 70           # Not exhausted
-MIN_GREEN_DISTANCE = 2.0  # Confirmed close above new support (in %)
-
 CUSTOM_TICKERS = [
     "At","A2Z","ACE","ACH","ACT","ADA","ADX","AGLD","AIXBT","Algo","ALICE","ALPINE","ALT","AMP","ANKR","APE",
     "API3","APT","AR","ARB","ARDR","Ark","ARKM","ARPA","ASTR","Ata","ATOM","AVA","AVAX","AWE","AXL","BANANA",
@@ -280,59 +274,16 @@ def check_breakouts(symbols):
 
     return breakouts
 
-def passes_filters(vm, rsi, green_distance):
-    """Check if breakout meets all filter requirements"""
-    if rsi is None:
-        return False
-    
-    # Check all three conditions
-    vm_check = vm >= MIN_VM
-    rsi_check = MIN_RSI <= rsi <= MAX_RSI
-    green_check = green_distance > MIN_GREEN_DISTANCE
-    
-    return vm_check and rsi_check and green_check
-
 def format_breakout_report(fresh, duration):
     if not fresh:
         return None
     
-    # Apply filters BEFORE grouping
-    filtered = []
-    filtered_out = []
-    
-    for p in fresh:
-        symbol, pct, close, vol_usdt, vm, rsi, direction, old_red_line, red_distance, new_green_line, green_distance, hour = p
-        
-        if passes_filters(vm, rsi, green_distance):
-            filtered.append(p)
-        else:
-            filtered_out.append((symbol, vm, rsi, green_distance))
-    
-    # Log filtered out items
-    if filtered_out:
-        print(f"\n⚠️  Filtered out {len(filtered_out)} breakouts that didn't meet criteria:")
-        for sym, vm, rsi, gd in filtered_out:
-            rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
-            reasons = []
-            if vm < MIN_VM:
-                reasons.append(f"VM:{vm:.2f}<{MIN_VM}")
-            if rsi is None or rsi < MIN_RSI or rsi > MAX_RSI:
-                reasons.append(f"RSI:{rsi_str} not in [{MIN_RSI}-{MAX_RSI}]")
-            if gd <= MIN_GREEN_DISTANCE:
-                reasons.append(f"GD:{gd:.2f}%<={MIN_GREEN_DISTANCE}%")
-            print(f"  ❌ {sym:10s} - {', '.join(reasons)}")
-    
-    if not filtered:
-        print("\n✅ No breakouts passed all filters.")
-        return None
-    
     grouped = defaultdict(list)
-    for p in filtered:
+    for p in fresh:
         grouped[p[11]].append(p)
 
-    report = f"🚀 <b>FILTERED TREND BREAKOUT ALERTS</b> 🚀\n"
-    report += f"⏱ Scan: {duration:.2f}s | Passed: {len(filtered)}/{len(fresh)}\n"
-    report += f"📊 Filters: VM≥{MIN_VM} | RSI {MIN_RSI}-{MAX_RSI} | Green>{MIN_GREEN_DISTANCE}%\n\n"
+    report = f"🚀 <b>TREND BREAKOUT ALERTS</b> 🚀\n"
+    report += f"⏱ Scan: {duration:.2f}s\n\n"
     
     for h in sorted(grouped):
         items = sorted(grouped[h], key=lambda x: x[8], reverse=True)
@@ -364,10 +315,6 @@ def main():
 
     print("Starting breakout scanner...")
     print(f"Monitoring {len(symbols)} pairs for trend reversals (downtrend → uptrend)")
-    print(f"📊 Active Filters:")
-    print(f"   • Volume Multiplier (VM) ≥ {MIN_VM}")
-    print(f"   • RSI between {MIN_RSI} and {MAX_RSI}")
-    print(f"   • Green Distance > {MIN_GREEN_DISTANCE}%")
     print("-" * 80)
 
     while True:
@@ -398,8 +345,6 @@ def main():
                 print(msg)
                 print("="*80)
                 send_telegram(msg[:4096])
-            else:
-                print("No breakouts passed the filters.")
         else:
             print(f"No new breakouts found.")
 
