@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 
 # ==== Settings ====
-BINANCE_API = "https://api.binance.com"
+BINANCE_API = "https://api.binance.com  "
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 RSI_PERIOD = 14
@@ -38,7 +38,7 @@ session.mount("https://", adapter)
 
 # ==== Telegram ====
 def send_telegram(msg):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot  {TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
         requests.post(url, data={
             "chat_id": TELEGRAM_CHAT_ID,
@@ -88,7 +88,7 @@ def calculate_rsi_with_full_history(closes, period=14):
     return round(rsi, 2)
 
 # ==== Supertrend Calculation ====
-# Source - https://stackoverflow.com/a/78996666
+# Source - https://stackoverflow.com/a/78996666  
 # Posted by Muhammad Saqib Scientist
 # Retrieved 2025-12-30, License - CC BY-SA 4.0
 def calculate_atr_rma(candles, current_index, period=10):
