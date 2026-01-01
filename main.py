@@ -38,15 +38,29 @@ session.mount("https://", adapter)
 
 # ==== Telegram ====
 def send_telegram(msg):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("⚠️  ERROR: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID environment variables not set!")
+        return False
+    
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
-        requests.post(url, data={
+        response = requests.post(url, data={
             "chat_id": TELEGRAM_CHAT_ID,
             "text": msg,
             "parse_mode": "HTML"
         }, timeout=60)
+        
+        if response.status_code == 200:
+            print("✅ Telegram message sent successfully!")
+            return True
+        else:
+            print(f"❌ Telegram error: Status {response.status_code}")
+            print(f"   Response: {response.text}")
+            return False
     except Exception as e:
-        print("Telegram error:", e)
+        print(f"❌ Telegram error: {e}")
+        return False
+
 
 # ==== Utils ====
 def format_volume(v):
