@@ -304,9 +304,9 @@ def format_compact_retest_report(retests, duration):
         grouped[r[11]].append(r)
 
     lines = []
-    lines.append(f"🎯 SUPPORT RETEST ALERTS (1H) | Found: {len(retests)} | Scan: {duration:.1f}s")
-    lines.append("SYM      %CHG  RSI VMx   VOL  DIST UPTREND PEAK")
-    lines.append("-" * 55)
+    lines.append(f"🎯 RETESTS (1H) | Found: {len(retests)} | Scan: {duration:.1f}s")
+    lines.append("SYM     %CHG  RSI VMx   VOL  DIST  PEAK")
+    lines.append("-" * 48)
 
     for h in sorted(grouped, reverse=True):
         for item in grouped[h]:
@@ -319,14 +319,13 @@ def format_compact_retest_report(retests, duration):
             vm_f = f"{vm:4.1f}x"
             vol_f = f"{format_volume(vol_usdt):>5s}"
             dist_f = f"{distance:5.2f}"
-            upt_f = f"{uptrend_candles:7d}"
             peak_f = f"{highest_distance:5.1f}"
 
-            line = f"{sym_f} {pct_f} {rsi_f} {vm_f} {vol_f} {dist_f} {upt_f} {peak_f}"
+            line = f"{sym_f} {pct_f} {rsi_f} {vm_f} {vol_f} {dist_f} {peak_f}"
             lines.append(line)
         lines.append("")
 
-    lines.append("💡 Lower DIST = closer to support (stronger signal)")
+    lines.append("💡 Lower DIST = closer to support (better signal)")
     return "\n".join(lines)
 
 # ==== Main ====
