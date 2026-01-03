@@ -9,16 +9,11 @@ from collections import defaultdict
 BINANCE_API = "https://api.binance.com"
 
 # Telegram Bot for BREAKOUT alerts
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN_2")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID_2")
 
 RSI_PERIOD = 14
 reported_breakouts = set()
-
-# Strength filters (set to 0 to disable filtering)
-MIN_STRENGTH_SCORE = 0  # Minimum strength score (0-100). Recommended: 55+ for good signals, 65+ for strong only
-MIN_CSINCE = 0          # Minimum candles since last breakout (0 = no filter, 25 = at least 1 day, 100 = 4+ days)
-MIN_VOLUME_MULT = 0.0   # Minimum volume multiplier (0 = no filter, 1.5 = 50% above average, 2.0 = 2x average)
 
 CUSTOM_TICKERS = [
     "At","A2Z","ACE","ACH","ACT","ADA","ADX","AGLD","AIXBT","Algo","ALICE","ALPINE","ALT","AMP","ANKR","APE",
@@ -189,111 +184,14 @@ def get_usdt_pairs():
         print(f"✗ Exchange info error: {e}")
         return []
 
-# ==== STRENGTH SCORING ====
-def calculate_strength_score(csince, vm, rsi, red_distance, pct):
-    """
-    Calculate breakout strength score (0-100) based on key factors:
-    - csince: Time since last breakout (longer = stronger)
-    - vm: Volume multiplier (higher = stronger)
-    - rsi: Momentum (50-70 ideal, >70 overbought warning)
-    - red_distance: Distance from old resistance (higher = cleaner break)
-    - pct: Price change percentage (positive momentum)
-    """
-    score = 0
-    
-    # 1. Candles Since Last Breakout (0-30 points)
-    # Longer consolidation = stronger breakout potential
-    if csince >= 200:
-        score += 30  # 8+ days
-    elif csince >= 100:
-        score += 25  # 4+ days
-    elif csince >= 50:
-        score += 20  # 2+ days
-    elif csince >= 25:
-        score += 15  # 1+ day
-    elif csince >= 10:
-        score += 10
-    else:
-        score += 5   # Too recent
-    
-    # 2. Volume Multiplier (0-25 points)
-    # High volume confirms the breakout
-    if vm >= 3.0:
-        score += 25
-    elif vm >= 2.0:
-        score += 20
-    elif vm >= 1.5:
-        score += 15
-    elif vm >= 1.0:
-        score += 10
-    else:
-        score += 5
-    
-    # 3. RSI Analysis (0-25 points)
-    # Sweet spot: 50-70 (momentum without overbought)
-    if 55 <= rsi <= 65:
-        score += 25  # Perfect zone
-    elif 50 <= rsi <= 70:
-        score += 20  # Good zone
-    elif 45 <= rsi < 50:
-        score += 15  # Acceptable
-    elif 70 < rsi <= 75:
-        score += 12  # Slight overbought warning
-    elif rsi > 75:
-        score += 5   # Overbought risk
-    else:
-        score += 10  # Below 45 (weak momentum)
-    
-    # 4. Distance from Old Resistance (0-15 points)
-    # Clean break above resistance
-    if red_distance >= 3.0:
-        score += 15
-    elif red_distance >= 2.0:
-        score += 12
-    elif red_distance >= 1.0:
-        score += 10
-    elif red_distance >= 0.5:
-        score += 7
-    else:
-        score += 3   # Too close to resistance
-    
-    # 5. Price Change Momentum (0-5 points)
-    if pct >= 3.0:
-        score += 5
-    elif pct >= 2.0:
-        score += 4
-    elif pct >= 1.0:
-        score += 3
-    elif pct >= 0:
-        score += 2
-    else:
-        score += 0   # Negative momentum
-    
-    return min(100, score)
-
-def get_strength_emoji(score):
-    """Return emoji based on strength score"""
-    if score >= 85:
-        return "🔥"  # Exceptional
-    elif score >= 75:
-        return "⭐"  # Excellent
-    elif score >= 65:
-        return "✅"  # Strong
-    elif score >= 55:
-        return "🟢"  # Good
-    elif score >= 45:
-        return "🟡"  # Moderate
-    else:
-        return "⚪"  # Weak
-
-# ==== STAGE 1: BREAKOUT DETECTION (500 candles) ====
+# ==== STAGE 1: BREAKOUT DETECTION (30 candles) ====
 def detect_breakout(symbol):
     """
-    Stage 1: Detect breakout with 500 candles.
+    Stage 1: Detect breakout with 30 candles (minimum for supertrend calculation).
     Returns: basic_data if breakout detected, None otherwise
     """
     try:
-        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=500"
+        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=15m&limit=30"
         candles = session.get(url, timeout=5).json()
         
         if not candles or isinstance(candles, dict) or len(candles) < 20:
@@ -305,7 +203,7 @@ def detect_breakout(symbol):
         prev_candle = candles[last_idx - 1]
         
         candle_time = datetime.fromtimestamp(last_candle[0]/1000, tz=timezone.utc)
-        hour = candle_time.strftime("%Y-%m-%d %H:00")
+        time_str = candle_time.strftime("%Y-%m-%d %H:%M")
         
         prev_close = float(prev_candle[4])
         open_p = float(last_candle[1])
@@ -326,30 +224,15 @@ def detect_breakout(symbol):
             new_green_line = last_up
             green_distance = ((close - new_green_line) / new_green_line) * 100
             
-            # Look backwards for previous breakout (csince calculation)
-            csince = 500  # default
-            for look_back in range(1, min(499, last_idx)):
-                check_idx = last_idx - look_back
-                if check_idx < 15:
-                    break
-                
-                st_check = calculate_supertrend(candles[:check_idx+1])
-                if st_check:
-                    check_last_trend, check_prev_trend, _, _, _ = st_check
-                    if check_prev_trend == -1 and check_last_trend == 1:
-                        csince = look_back
-                        break
-            
             return {
                 'symbol': symbol,
-                'hour': hour,
+                'time_str': time_str,
                 'pct': pct,
                 'close': close,
                 'old_red_line': old_red_line,
                 'red_distance': red_distance,
                 'new_green_line': new_green_line,
-                'green_distance': green_distance,
-                'csince': csince
+                'green_distance': green_distance
             }
         
         return None
@@ -363,11 +246,11 @@ def calculate_rsi_and_vm(symbol):
     Stage 2: Fetch 25 candles to calculate RSI and Volume Multiplier.
     """
     try:
-        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=25"
+        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=15m&limit=25"
         candles = session.get(url, timeout=5).json()
         
         if not candles or isinstance(candles, dict) or len(candles) < 20:
-            return None, None
+            return None, None, None
         
         # Get last closed candle
         last_idx = len(candles) - 2
@@ -396,12 +279,12 @@ def calculate_rsi_and_vm(symbol):
 def scan_all_symbols(symbols):
     """
     Two-stage scanning:
-    Stage 1: Detect breakouts with 500 candles
+    Stage 1: Detect breakouts with 30 candles
     Stage 2: Calculate RSI and VM with 25 candles for detected breakouts
     """
     breakout_candidates = []
     
-    print(f"🔍 Stage 1: Detecting breakouts with 500 candles...")
+    print(f"🔍 Stage 1: Detecting breakouts with 30 candles...")
     stage1_start = time.time()
     
     # Stage 1: Detect breakouts
@@ -432,11 +315,6 @@ def scan_all_symbols(symbols):
                 data = futures[f]
                 
                 if rsi is not None and vm is not None:
-                    # Calculate strength score (0-100)
-                    strength_score = calculate_strength_score(
-                        data['csince'], vm, rsi, data['red_distance'], data['pct']
-                    )
-                    
                     breakouts_final.append((
                         data['symbol'],
                         data['pct'],
@@ -448,27 +326,11 @@ def scan_all_symbols(symbols):
                         data['red_distance'],
                         data['new_green_line'],
                         data['green_distance'],
-                        data['csince'],
-                        data['hour'],
-                        strength_score
+                        data['time_str']
                     ))
         
         stage2_duration = time.time() - stage2_start
         print(f"✓ Stage 2 completed in {stage2_duration:.2f}s")
-        
-        # Apply strength filters
-        if MIN_STRENGTH_SCORE > 0 or MIN_CSINCE > 0 or MIN_VOLUME_MULT > 0:
-            filtered = []
-            for b in breakouts_final:
-                # b[12] = strength_score, b[10] = csince, b[4] = vm
-                if (b[12] >= MIN_STRENGTH_SCORE and 
-                    b[10] >= MIN_CSINCE and 
-                    b[4] >= MIN_VOLUME_MULT):
-                    filtered.append(b)
-            
-            if len(filtered) < len(breakouts_final):
-                print(f"  Filtered: {len(breakouts_final)} → {len(filtered)} (applied strength filters)")
-                breakouts_final = filtered
     
     return breakouts_final
 
@@ -479,34 +341,28 @@ def format_breakout_report(breakouts, duration):
     
     grouped = defaultdict(list)
     for b in breakouts:
-        grouped[b[11]].append(b)
+        grouped[b[10]].append(b)
     
-    report = f"🚀 <b>TREND BREAKOUT ALERTS</b> 🚀\n"
+    report = f"🚀 <b>TREND BREAKOUT ALERTS (15m)</b> 🚀\n"
     report += f"⏱ Scan: {duration:.2f}s | Found: {len(breakouts)}\n\n"
     
     for h in sorted(grouped, reverse=True):
-        # Sort by strength score (highest first), then by red_distance
-        items = sorted(grouped[h], key=lambda x: (x[12], x[7]), reverse=True)
+        items = sorted(grouped[h], key=lambda x: x[7], reverse=True)
         report += f"⏰ {h} UTC\n"
         
-        for symbol, pct, close, vol_usdt, vm, rsi, old_red_line, red_distance, new_green_line, green_distance, csince, hour, strength_score in items:
+        for symbol, pct, close, vol_usdt, vm, rsi, old_red_line, red_distance, new_green_line, green_distance, time_str in items:
             sym = symbol.replace("USDT","")
             rsi_str = f"{rsi:.1f}" if rsi else "N/A"
-            csince_str = f"{csince:03d}"
-            strength_icon = get_strength_emoji(strength_score)
             
-            line1 = f"{sym:6s} {pct:5.2f} {rsi_str:>4s} {vm:4.1f} {format_volume(vol_usdt):4s} {csince_str} [{strength_score:2d}]"
+            line1 = f"{sym:6s} {pct:5.2f}% RSI:{rsi_str:>4s} VM:{vm:4.1f}x Vol:{format_volume(vol_usdt):4s}M"
             line2 = f"       🔴Old: ${old_red_line:.5f} (+{red_distance:.2f}%)"
             line3 = f"       🟢New: ${new_green_line:.5f} (+{green_distance:.2f}%)"
             
-            report += f"{strength_icon} <code>{line1}</code>\n"
+            report += f"<code>{line1}</code>\n"
             report += f"   <code>{line2}</code>\n"
             report += f"   <code>{line3}</code>\n"
         report += "\n"
     
-    report += "💡 <b>Strength Score Guide:</b>\n"
-    report += "🔥 85+ = Exceptional | ⭐ 75+ = Excellent | ✅ 65+ = Strong\n"
-    report += "🟢 55+ = Good | 🟡 45+ = Moderate | ⚪ &lt;45 = Weak\n\n"
     report += "💡 🔴Old = Last downtrend (broke above!)\n"
     report += "💡 🟢New = New uptrend (support)\n"
     
@@ -515,25 +371,10 @@ def format_breakout_report(breakouts, duration):
 # ==== Main ====
 def main():
     print("="*80)
-    print("🚀 BREAKOUT SCANNER - TWO-STAGE ANALYSIS")
+    print("🚀 BREAKOUT SCANNER - TWO-STAGE ANALYSIS (15-MINUTE TIMEFRAME)")
     print("="*80)
-    print(f"⚡ Stage 1: Detect breakouts with 500 candles (ALL symbols)")
+    print(f"⚡ Stage 1: Detect breakouts with 30 candles (ALL symbols)")
     print(f"🔬 Stage 2: Calculate RSI & VM with 25 candles (DETECTED breakouts only)")
-    
-    # Show active filters
-    filters_active = []
-    if MIN_STRENGTH_SCORE > 0:
-        filters_active.append(f"Min Score: {MIN_STRENGTH_SCORE}")
-    if MIN_CSINCE > 0:
-        filters_active.append(f"Min Csince: {MIN_CSINCE}")
-    if MIN_VOLUME_MULT > 0:
-        filters_active.append(f"Min VM: {MIN_VOLUME_MULT}x")
-    
-    if filters_active:
-        print(f"🔍 Filters: {' | '.join(filters_active)}")
-    else:
-        print(f"🔍 Filters: NONE (showing all breakouts)")
-    
     print("="*80)
     
     symbols = get_usdt_pairs()
@@ -557,10 +398,10 @@ def main():
         print(f"\n✓ Complete scan finished in {total_duration:.2f}s")
         
         # === FILTER NEW ALERTS ===
-        fresh_breakouts = [b for b in breakouts if (b[0], b[11]) not in reported_breakouts]
+        fresh_breakouts = [b for b in breakouts if (b[0], b[10]) not in reported_breakouts]
         
         for b in fresh_breakouts:
-            reported_breakouts.add((b[0], b[11]))
+            reported_breakouts.add((b[0], b[10]))
         
         print(f"  New alerts: {len(fresh_breakouts)} breakouts")
         
@@ -569,14 +410,18 @@ def main():
             msg = format_breakout_report(fresh_breakouts, total_duration)
             if msg:
                 print("\n📤 Sending BREAKOUT alert...")
+                print("\n" + "="*80)
+                print(msg.replace("<b>", "").replace("</b>", "").replace("<code>", "").replace("</code>", ""))
+                print("="*80)
                 send_telegram(msg[:4096])
         
-        # === WAIT FOR NEXT HOUR ===
+        # === WAIT FOR NEXT 15-MINUTE INTERVAL ===
         server_time = get_binance_server_time()
-        next_hour = (server_time // 3600 + 1) * 3600
-        sleep_time = max(60, next_hour - server_time + 5)
+        # Calculate next 15-minute mark (0, 15, 30, 45 of each hour)
+        next_interval = (server_time // 900 + 1) * 900  # 900 seconds = 15 minutes
+        sleep_time = max(30, next_interval - server_time + 5)
         
-        print(f"\n😴 Sleeping {sleep_time:.0f}s until next hour...\n")
+        print(f"\n😴 Sleeping {sleep_time:.0f}s until next 15-minute interval...\n")
         time.sleep(sleep_time)
 
 if __name__ == "__main__":
