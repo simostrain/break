@@ -9,8 +9,8 @@ from collections import defaultdict
 BINANCE_API = "https://api.binance.com"
 
 # Telegram Bot for BREAKOUT alerts
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN_2")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID_2")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 RSI_PERIOD = 14
 reported_breakouts = set()
@@ -354,7 +354,7 @@ def format_breakout_report(breakouts, duration):
             sym = symbol.replace("USDT","")
             rsi_str = f"{rsi:.1f}" if rsi else "N/A"
             
-            line1 = f"{sym:6s} {pct:5.2f}% RSI:{rsi_str:>4s} VM:{vm:4.1f}x Vol:{format_volume(vol_usdt):4s}M"
+            line1 = f"{sym:6s} {pct:5.2f}% {rsi_str:>4s} {vm:4.1f}x {format_volume(vol_usdt):4s}M"
             line2 = f"       🔴Old: ${old_red_line:.5f} (+{red_distance:.2f}%)"
             line3 = f"       🟢New: ${new_green_line:.5f} (+{green_distance:.2f}%)"
             
