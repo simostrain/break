@@ -9,8 +9,8 @@ from collections import defaultdict
 BINANCE_API = "https://api.binance.com"
 
 # Telegram Bot for BREAKOUT alerts
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN_")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID_")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN_2")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID_2")
 
 RSI_PERIOD = 14
 reported_breakouts = set()
@@ -63,11 +63,7 @@ def send_telegram(msg, max_retries=3):
 
 # ==== Utils ====
 def format_volume(v):
-    """Format volume in K or M"""
-    if v >= 1_000_000:
-        return f"{v/1_000_000:.0f}M"
-    else:
-        return f"{v/1_000:.0f}K"
+    return f"{v/1_000_000:.2f}"
 
 def get_binance_server_time():
     try:
@@ -357,15 +353,14 @@ def format_breakout_report(breakouts, duration):
         for symbol, pct, close, vol_usdt, vm, rsi, old_red_line, red_distance, new_green_line, green_distance, time_str in items:
             sym = symbol.replace("USDT","")
             rsi_str = f"{rsi:.1f}" if rsi else "N/A"
-            vol_str = format_volume(vol_usdt)
             
-            line1 = f"{sym:8s}{pct:5.2f}% {rsi_str} {vm:.1f}x {vol_str}"
-            line2 = f"          🔴Old: ${old_red_line:.5f} (+{red_distance:.2f}%)"
-            line3 = f"          🟢New: ${new_green_line:.5f} (+{green_distance:.2f}%)"
+            line1 = f"{sym:6s} {pct:5.2f}% RSI:{rsi_str:>4s} VM:{vm:4.1f}x Vol:{format_volume(vol_usdt):4s}M"
+            line2 = f"       🔴Old: ${old_red_line:.5f} (+{red_distance:.2f}%)"
+            line3 = f"       🟢New: ${new_green_line:.5f} (+{green_distance:.2f}%)"
             
             report += f"<code>{line1}</code>\n"
-            report += f"<code>{line2}</code>\n"
-            report += f"<code>{line3}</code>\n"
+            report += f"   <code>{line2}</code>\n"
+            report += f"   <code>{line3}</code>\n"
         report += "\n"
     
     report += "💡 🔴Old = Last downtrend (broke above!)\n"
