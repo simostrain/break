@@ -6,17 +6,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 
 # ==== Settings ====
-BINANCE_API = "https://api.binance.com"  # NO TRAILING SPACES
+BINANCE_API = "https://api.binance.com"
 
-# Telegram (use environment variables)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 RSI_PERIOD = 14
 reported_retests = set()
 
-# Retest logic
-RETEST_PROXIMITY = 2.0  # % from green support
+RETEST_PROXIMITY = 2.0
 MIN_CANDLES_AFTER_BREAKOUT = 5
 
 CUSTOM_TICKERS = [
@@ -55,7 +53,7 @@ def send_telegram(msg, max_retries=3):
         try:
             response = requests.post(url, data={
                 "chat_id": TELEGRAM_CHAT_ID,
-                "text": msg[:4000]  # Safe under 4096
+                "text": msg[:3900]  # Safe margin
             }, timeout=10)
             
             if response.status_code == 200:
@@ -266,17 +264,14 @@ def calculate_rsi_and_vm(symbol):
 # ==== Scanning ====
 def scan_all_symbols(symbols):
     retest_candidates = []
-    print(f"🔍 Stage 1: Detecting retests...")
     with ThreadPoolExecutor(max_workers=150) as ex:
         futures = {ex.submit(detect_retest, s): s for s in symbols}
         for f in as_completed(futures):
             data = f.result()
             if data:
                 retest_candidates.append(data)
-    print(f"✓ Stage 1: {len(retest_candidates)} retests found")
     retests_final = []
     if retest_candidates:
-        print(f"🔬 Stage 2: Calculating RSI & VM...")
         with ThreadPoolExecutor(max_workers=50) as ex:
             futures = {ex.submit(calculate_rsi_and_vm, d['symbol']): d for d in retest_candidates}
             for f in as_completed(futures):
@@ -299,7 +294,7 @@ def scan_all_symbols(symbols):
                     ))
     return retests_final
 
-# ==== Formatting ====
+# ==== Formatting (FINAL ALIGNMENT) ====
 def format_compact_retest_report(retests, duration):
     if not retests:
         return None
@@ -310,42 +305,35 @@ def format_compact_retest_report(retests, duration):
 
     lines = []
     lines.append(f"🎯 SUPPORT RETEST ALERTS (1H) | Found: {len(retests)} | Scan: {duration:.1f}s")
-    lines.append("")
+    lines.append("SYM      %CHG  RSI VMx   VOL  DIST UPTREND PEAK")
+    lines.append("-" * 55)
 
     for h in sorted(grouped, reverse=True):
         for item in grouped[h]:
             symbol, pct, close, vol_usdt, vm, rsi, support_line, distance, uptrend_candles, highest_distance, uptrend_start_time, time_str = item
-            sym = symbol.replace("USDT", "")
-            vol_str = format_volume(vol_usdt)
+            sym = symbol.replace("USDT", "")[:6]
 
-            # Remove % signs and + signs, keep numbers clean
-            line = (
-                f"{sym:<7s} "
-                f"{pct:6.2f} "
-                f"{rsi:4.1f} "
-                f"{vm:3.1f}x "
-                f"{vol_str:>5s} "
-                f"{distance:5.2f} "
-                f"{uptrend_candles:2d} "
-                f"{highest_distance:4.1f}"
-            )
+            sym_f = f"{sym:>6s}"
+            pct_f = f"{pct:6.2f}"
+            rsi_f = f"{rsi:5.1f}"
+            vm_f = f"{vm:4.1f}x"
+            vol_f = f"{format_volume(vol_usdt):>5s}"
+            dist_f = f"{distance:5.2f}"
+            upt_f = f"{uptrend_candles:7d}"
+            peak_f = f"{highest_distance:5.1f}"
+
+            line = f"{sym_f} {pct_f} {rsi_f} {vm_f} {vol_f} {dist_f} {upt_f} {peak_f}"
             lines.append(line)
         lines.append("")
 
-    lines.append("💡 Format: SYM %CHG RSI VMx VOL DIST UPTRENDh PEAK")
+    lines.append("💡 Lower DIST = closer to support (stronger signal)")
     return "\n".join(lines)
 
 # ==== Main ====
 def main():
     print("="*80)
-    print("🎯 RETEST SCANNER - COMPACT FORMAT (1H)")
+    print("🎯 RETEST SCANNER - FINAL COMPACT FORMAT")
     print("="*80)
-    print(f"⚙️  RETEST_PROXIMITY: {RETEST_PROXIMITY}% | MIN_UPTREND: {MIN_CANDLES_AFTER_BREAKOUT}h")
-    print("="*80)
-
-    # Debug env vars
-    print(f"DEBUG: TELEGRAM_BOT_TOKEN set: {'YES' if TELEGRAM_BOT_TOKEN else 'NO'}")
-    print(f"DEBUG: TELEGRAM_CHAT_ID = {TELEGRAM_CHAT_ID}")
 
     symbols = get_usdt_pairs()
     if not symbols:
@@ -374,9 +362,9 @@ def main():
             msg = format_compact_retest_report(fresh_retests, total_duration)
             if msg:
                 print("\n📤 Sending alert...")
-                print("\n" + "="*70)
+                print("\n" + "="*60)
                 print(msg)
-                print("="*70)
+                print("="*60)
                 send_telegram(msg)
 
         server_time = get_binance_server_time()
