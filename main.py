@@ -210,21 +210,6 @@ def detect_retest(symbol):
         if not (touched_or_broken and closed_above):
             return None
 
-        # Confirm there was a meaningful move before pullback
-        highest_distance = 0
-        check_range = min(8, len(candles) - 12)
-        for i in range(last_idx - check_range, last_idx):
-            if i < 11:
-                continue
-            check_close = float(candles[i][4])
-            check_support = up_list[i - 11]
-            check_distance = ((check_close - check_support) / check_support) * 100
-            if check_distance > highest_distance:
-                highest_distance = check_distance
-
-        if highest_distance < 3.0:
-            return None
-
         # Optional: ensure price was moving toward support (not away)
         recent_distances = []
         for i in range(max(0, last_idx - 2), last_idx + 1):
@@ -249,8 +234,7 @@ def detect_retest(symbol):
             'close': close,
             'support_line': current_support,
             'distance_from_support': ((close - current_support) / current_support) * 100,
-            'uptrend_candles': uptrend_candles,
-            'highest_distance': highest_distance
+            'uptrend_candles': uptrend_candles
         }
 
     except Exception as e:
@@ -310,8 +294,6 @@ def scan_all_symbols(symbols):
                         data['support_line'],
                         data['distance_from_support'],
                         data['uptrend_candles'],
-                        data['highest_distance'],
-                        None,  # unused
                         data['time_str']
                     ))
     return retests_final
@@ -323,7 +305,7 @@ def format_compact_retest_report(retests, duration):
 
     grouped = defaultdict(list)
     for r in retests:
-        grouped[r[11]].append(r)
+        grouped[r[9]].append(r)
 
     lines = []
     lines.append(f"🎯 RETESTS (1H) | Found: {len(retests)} | Scan: {duration:.1f}s")
@@ -332,7 +314,7 @@ def format_compact_retest_report(retests, duration):
         # Sort by distance (closest = best)
         sorted_items = sorted(grouped[h], key=lambda x: x[7])
         for item in sorted_items:
-            symbol, pct, close, vol_usdt, vm, rsi, support_line, distance, uptrend_candles, highest_distance, _, time_str = item
+            symbol, pct, close, vol_usdt, vm, rsi, support_line, distance, uptrend_candles, time_str = item
             sym = symbol.replace("USDT", "")[:6]
 
             line = (
@@ -342,7 +324,7 @@ def format_compact_retest_report(retests, duration):
                 f"{vm:4.1f}x "
                 f"{format_volume(vol_usdt):>4s} "
                 f"{distance:4.2f} "
-                f"{highest_distance:4.1f}"
+                f"ST:{support_line:.6f}"
             )
             lines.append(line)
 
@@ -372,9 +354,9 @@ def main():
         retests = scan_all_symbols(symbols)
         total_duration = time.time() - total_start
 
-        fresh_retests = [r for r in retests if (r[0], r[11]) not in reported_retests]
+        fresh_retests = [r for r in retests if (r[0], r[9]) not in reported_retests]
         for r in fresh_retests:
-            reported_retests.add((r[0], r[11]))
+            reported_retests.add((r[0], r[9]))
 
         print(f"✓ Scan done in {total_duration:.2f}s | New alerts: {len(fresh_retests)}")
 
