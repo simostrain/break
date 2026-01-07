@@ -2,9 +2,11 @@ import os
 import requests
 import time
 import math
+import json
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
+from pathlib import Path
 
 # ==== Settings ====
 BINANCE_API = "https://api.binance.com"
@@ -47,14 +49,37 @@ CUSTOM_TICKERS = [
     "SOMI","W","WAL","XPL","ZBT","ZKC"
 ]
 
+# Log file path (use /tmp for Railway or adjust for your environment)
+LOG_FILE = Path("/tmp/signal_log.json")
+
 # ==== Session ====
 session = requests.Session()
 adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=2)
 session.mount("https://", adapter)
 
+# ==== Logging ====
+def log_signal_to_file(signal_data, signal_type):
+    """Log signals to a JSON file as backup"""
+    log_entry = {
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'type': signal_type,
+        'data': signal_data
+    }
+    
+    try:
+        with open(LOG_FILE, 'a') as f:
+            f.write(json.dumps(log_entry) + '\n')
+        print(f"  📝 Logged {signal_type} to file")
+    except Exception as e:
+        print(f"  ⚠️ Failed to log to file: {e}")
+
 # ==== Telegram ====
 def send_telegram(msg, max_retries=3):
     """Send message to Telegram bot with retry logic"""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("⚠️ Telegram credentials not set!")
+        return False
+    
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     
     for attempt in range(max_retries):
@@ -66,12 +91,16 @@ def send_telegram(msg, max_retries=3):
             }, timeout=10)
             
             if response.status_code == 200:
-                print(f"✓ Alert sent to Telegram")
+                print(f"  ✅ Alert sent to Telegram (attempt {attempt + 1})")
                 return True
+            else:
+                print(f"  ⚠️ Telegram API returned status {response.status_code} (attempt {attempt + 1})")
         except Exception as e:
+            print(f"  ⚠️ Telegram error on attempt {attempt + 1}: {e}")
             if attempt < max_retries - 1:
                 time.sleep(2)
     
+    print(f"  ❌ Failed to send to Telegram after {max_retries} attempts")
     return False
 
 # ==== Utils ====
@@ -343,7 +372,7 @@ def detect_signals(symbol):
                     'green_distance': green_distance,
                     'csince': csince,
                     'vol_usdt': vol_usdt,
-                    'vm': vol_usdt / vol_sma if vol_sma > 0 else 1.0,
+                    'vm': volume / vol_sma if vol_sma > 0 else 1.0,  # Fixed: use base volume for VM
                     'indicator_strength': indicator_strength
                 }
         
@@ -380,7 +409,7 @@ def detect_signals(symbol):
                             'supertrend': last_up,
                             'bars_in_trend': bars_in_trend,
                             'vol_usdt': vol_usdt,
-                            'vm': vol_usdt / vol_sma if vol_sma > 0 else 1.0,
+                            'vm': volume / vol_sma if vol_sma > 0 else 1.0,  # Fixed: use base volume for VM
                             'indicator_strength': indicator_strength,
                             'support_distance': ((close - last_up) / last_up) * 100
                         }
@@ -522,7 +551,7 @@ def format_signal_report(signals, duration):
                 csince_str = f"{b['csince']:03d}"
                 ind_str = f"{b['indicator_strength']:.2f}"
                 
-                line1 = f"{sym:6s} {b['pct']:5.2f} {rsi_str:>4s} {b['vm']:4.1f} {format_volume(b['vol_usdt']):4s} {csince_str} S:{ind_str}"
+                line1 = f"{sym:6s} {b['pct']:5.2f}% RSI:{rsi_str:>4s} VM:{b['vm']:4.1f}x Vol:{format_volume(b['vol_usdt']):4s}M C:{csince_str} S:{ind_str}"
                 line2 = f"       🔴Old: ${b['old_red_line']:.5f} (+{b['red_distance']:.2f}%)"
                 line3 = f"       🟢New: ${b['new_green_line']:.5f} (+{b['green_distance']:.2f}%)"
                 
@@ -541,7 +570,7 @@ def format_signal_report(signals, duration):
                 ind_str = f"{r['indicator_strength']:.2f}"
                 bars_str = f"{r['bars_in_trend']:02d}"
                 
-                line1 = f"{sym:6s} {r['pct']:5.2f} {rsi_str:>4s} {r['vm']:4.1f} {format_volume(r['vol_usdt']):4s} B:{bars_str} S:{ind_str}"
+                line1 = f"{sym:6s} {r['pct']:5.2f}% RSI:{rsi_str:>4s} VM:{r['vm']:4.1f}x Vol:{format_volume(r['vol_usdt']):4s}M B:{bars_str} S:{ind_str}"
                 line2 = f"       🟢ST: ${r['supertrend']:.5f} (+{r['support_distance']:.2f}%)"
                 
                 report += f"<code>{line1}</code>\n"
@@ -551,15 +580,15 @@ def format_signal_report(signals, duration):
     
     report += "💡 <b>Legend:</b>\n"
     report += "B = Breakout (🟢) | R = Retest (🔵)\n"
-    report += "S = Indicator Strength (0-10)\n"
-    report += "B:XX = Bars since trend start\n"
+    report += "S = Indicator Strength (0-10) | VM = Volume Multiplier\n"
+    report += "C = Candles since last breakout | B:XX = Bars since trend start\n"
     
     return report
 
 # ==== Main ====
 def main():
     print("="*80)
-    print("🚀 SUPERTREND BREAKOUT + RETEST SCANNER")
+    print("🚀 SUPERTREND BREAKOUT + RETEST SCANNER (FIXED VERSION)")
     print("="*80)
     print(f"⚡ Detecting: Breakouts + Retests (TradingView Indicator Logic)")
     
@@ -578,7 +607,14 @@ def main():
         print(f"🔍 Breakout Filters: NONE (showing all)")
     
     print(f"📊 Retest Settings: VM={VOL_MULT_RETEST}x, MaxBars={RETEST_TIMING_MAX}")
+    print(f"📝 Signal Log File: {LOG_FILE}")
     print("="*80)
+    
+    # Check Telegram credentials
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("⚠️ WARNING: Telegram credentials not configured!")
+        print("   Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID environment variables")
+        print("="*80)
     
     symbols = get_usdt_pairs()
     if not symbols:
@@ -599,8 +635,9 @@ def main():
         total_duration = time.time() - total_start
         
         print(f"\n✓ Complete scan finished in {total_duration:.2f}s")
+        print(f"  Total detected: {len(signals['breakouts'])} breakouts, {len(signals['retests'])} retests")
         
-        # Filter new signals
+        # Filter new signals FIRST (before any messaging)
         fresh_signals = {'breakouts': [], 'retests': []}
         
         for b in signals['breakouts']:
@@ -608,29 +645,50 @@ def main():
             if signal_key not in reported_signals:
                 reported_signals.add(signal_key)
                 fresh_signals['breakouts'].append(b)
+                # Log to file
+                log_signal_to_file(b, 'breakout')
         
         for r in signals['retests']:
             signal_key = ('R', r['symbol'], r['hour'])
             if signal_key not in reported_signals:
                 reported_signals.add(signal_key)
                 fresh_signals['retests'].append(r)
+                # Log to file
+                log_signal_to_file(r, 'retest')
         
         fresh_count = len(fresh_signals['breakouts']) + len(fresh_signals['retests'])
-        print(f"  New alerts: {len(fresh_signals['breakouts'])} breakouts, {len(fresh_signals['retests'])} retests")
         
-        # Send alerts
+        # Report status
         if fresh_count > 0:
+            print(f"\n🆕 New signals detected:")
+            print(f"   • {len(fresh_signals['breakouts'])} breakout(s)")
+            print(f"   • {len(fresh_signals['retests'])} retest(s)")
+            
+            # Generate report
             msg = format_signal_report(fresh_signals, total_duration)
             if msg:
-                print("\n📤 Sending alerts to Telegram...")
-                send_telegram(msg[:4096])
+                print(f"\n📤 Sending {fresh_count} alert(s) to Telegram...")
+                success = send_telegram(msg[:4096])
+                
+                if not success:
+                    print("  ❌ CRITICAL: Failed to send alert after retries!")
+                    print("  🔄 Removing signals from cache to retry next scan...")
+                    # Remove failed signals so they get retried
+                    for b in fresh_signals['breakouts']:
+                        reported_signals.discard(('B', b['symbol'], b['hour']))
+                    for r in fresh_signals['retests']:
+                        reported_signals.discard(('R', r['symbol'], r['hour']))
+        else:
+            print(f"\n  ℹ️ No new signals to report (all previously detected)")
         
         # Wait for next hour
         server_time = get_binance_server_time()
         next_hour = (server_time // 3600 + 1) * 3600
         sleep_time = max(60, next_hour - server_time + 5)
         
-        print(f"\n😴 Sleeping {sleep_time:.0f}s until next hour...\n")
+        print(f"\n😴 Sleeping {sleep_time:.0f}s until next hour (next scan ~{datetime.fromtimestamp(next_hour, tz=timezone.utc).strftime('%H:%M:%S')} UTC)...")
+        print(f"{'='*80}\n")
+        
         time.sleep(sleep_time)
 
 if __name__ == "__main__":
