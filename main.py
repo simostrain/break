@@ -15,7 +15,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 # Your exact thresholds
 MAX_CANDLE_MOVE_1H = 1.0      # ±1% per 1h candle (for both conditions)
 VOL_MULT_THRESHOLD = 1.5      # for accumulation
-MIN_MOMENTUM_PCT = 0.8        # for momentum kick
+MIN_MOMENTUM_PCT = 1        # for momentum kick
 
 CUSTOM_TICKERS = [
     "At","A2Z","ACE","ACH","ACT","ADA","ADX","AGLD","AIXBT","Algo","ALICE","ALPINE","ALT","AMP","ANKR","APE",
